@@ -1,0 +1,2301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<title>Card Vendor POS</title>
+<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgo=" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<style>
+  html, body { margin: 0; padding: 0; background: #F5F6F3; }
+  #root { min-height: 100vh; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div id="root">Loading…</div>
+<script>
+  window.addEventListener("error", function (e) {
+    var root = document.getElementById("root");
+    if (root && root.textContent.indexOf("Loading") !== -1) {
+      root.innerHTML =
+        '<div style="font-family: monospace; padding: 24px; color: #B0413E; white-space: pre-wrap;">' +
+        "Something failed to load:\n\n" +
+        (e.message || "Unknown error") +
+        (e.filename ? "\n\nFile: " + e.filename + ":" + e.lineno : "") +
+        "\n\nTry refreshing the page. If it keeps happening, check your internet connection (this app loads React from a CDN and needs it to load fully)." +
+        "</div>";
+    }
+  });
+</script>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect } = React;
+
+/* ---------- Simple text-glyph icon shims (replaces lucide-react for standalone use) ---------- */
+function makeIcon(glyph, extraStyle) {
+  return function Icon({ size = 14, color = "currentColor", style }) {
+    return (
+      <span
+        style={{
+          fontSize: size,
+          color,
+          lineHeight: 1,
+          display: "inline-block",
+          fontFamily: "system-ui, sans-serif",
+          fontWeight: 600,
+          ...extraStyle,
+          ...style,
+        }}
+      >
+        {glyph}
+      </span>
+    );
+  };
+}
+const Plus = makeIcon("+");
+const Minus = makeIcon("\u2212");
+const Trash2 = makeIcon("\uD83D\uDDD1");
+const Check = makeIcon("\u2713");
+const X = makeIcon("\u2715");
+const Receipt = makeIcon("\uD83E\uDDFE");
+const ChevronLeft = makeIcon("\u2039");
+const ArrowRightLeft = makeIcon("\u21C4");
+const Wallet = makeIcon("\uD83D\uDCB0");
+const ShoppingBag = makeIcon("\uD83D\uDECD");
+const SettingsIcon = makeIcon("\u2699");
+const Pencil = makeIcon("\u270E");
+const LinkIcon = makeIcon("\uD83D\uDD17");
+
+/* ---------- Firebase (Google sign-in + per-user cloud storage) ---------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyAlbTncs-FQB97S46bsUOZBSeu5jHkhJfQ",
+  authDomain: "vendor-pos-ce47b.firebaseapp.com",
+  projectId: "vendor-pos-ce47b",
+  storageBucket: "vendor-pos-ce47b.firebasestorage.app",
+  messagingSenderId: "311568022445",
+  appId: "1:311568022445:web:0714f2a3f5115f2e12ff24",
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+/* Builds a window.storage-compatible object backed by one Firestore doc per signed-in user */
+function makeFirestoreStorage(uid) {
+  const docRef = db.collection("posData").doc(uid);
+  return {
+    get: async (key) => {
+      const snap = await docRef.get();
+      const data = snap.exists ? snap.data() : {};
+      if (!(key in data)) throw new Error("not found");
+      return { key, value: data[key], shared: false };
+    },
+    set: async (key, value) => {
+      await docRef.set({ [key]: value }, { merge: true });
+      return { key, value, shared: false };
+    },
+    delete: async (key) => {
+      await docRef.update({ [key]: firebase.firestore.FieldValue.delete() });
+      return { key, deleted: true, shared: false };
+    },
+    list: async (prefix) => {
+      const snap = await docRef.get();
+      const data = snap.exists ? snap.data() : {};
+      const keys = Object.keys(data).filter((k) => !prefix || k.startsWith(prefix));
+      return { keys };
+    },
+  };
+}
+
+function SignInScreen({ onSignIn, error }) {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#F5F6F3",
+        fontFamily: "'Inter', sans-serif",
+        padding: 20,
+      }}
+    >
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #DAD8D0",
+          borderRadius: 12,
+          padding: "36px 32px",
+          maxWidth: 360,
+          width: "100%",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, fontSize: 18, marginBottom: 8 }}>
+          CARD VENDOR POS
+        </div>
+        <div style={{ fontSize: 13, color: "#6B6E68", marginBottom: 24, lineHeight: 1.5 }}>
+          Sign in with your Google account to load your data, or start syncing across devices.
+        </div>
+        <button
+          onClick={onSignIn}
+          style={{
+            width: "100%",
+            padding: "12px 0",
+            borderRadius: 8,
+            border: "1px solid #DAD8D0",
+            background: "#FFFFFF",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          Sign in with Google
+        </button>
+        {error && (
+          <div style={{ color: "#B0413E", fontSize: 12.5, marginTop: 14 }}>{error}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AppRoot() {
+  const [user, setUser] = useState(undefined); // undefined = checking, null = signed out
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((u) => {
+      if (u) window.storage = makeFirestoreStorage(u.uid);
+      setUser(u);
+    });
+    return unsub;
+  }, []);
+
+  function handleSignIn() {
+    setError("");
+    const provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider).catch((err) => setError(err.message));
+  }
+
+  if (user === undefined) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'IBM Plex Mono', monospace", color: "#6B6E68" }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <SignInScreen onSignIn={handleSignIn} error={error} />;
+  }
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          alignItems: "center",
+          gap: 10,
+          padding: "10px 20px 0",
+          maxWidth: 980,
+          margin: "0 auto",
+          fontSize: 12.5,
+          color: "#6B6E68",
+          fontFamily: "'Inter', sans-serif",
+        }}
+      >
+        <span>Signed in as {user.email}</span>
+        <button
+          onClick={() => auth.signOut()}
+          style={{ background: "none", border: "1px solid #DAD8D0", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}
+        >
+          Sign out
+        </button>
+      </div>
+      <POS key={user.uid} />
+    </div>
+  );
+}
+
+const DEFAULT_CATEGORIES = ["Singles", "Sealed Product", "Graded", "Bulk/Lots"];
+
+const DEFAULT_PRODUCTS = [
+  { id: "p1", name: "Charizard ex (example)", value: 45.0, cost: 30.0, cat: "Singles", tag: "CHZ", stock: 3 },
+  { id: "p2", name: "Pikachu VMAX (example)", value: 18.0, cost: 11.0, cat: "Singles", tag: "PIK", stock: 5 },
+  { id: "p3", name: "Booster Pack (example)", value: 4.5, cost: 3.25, cat: "Sealed Product", tag: "PACK", stock: 12 },
+  { id: "p4", name: "Elite Trainer Box (example)", value: 42.0, cost: 32.0, cat: "Sealed Product", tag: "ETB", stock: 2 },
+  { id: "p5", name: "PSA 10 Slab (example)", value: 120.0, cost: 85.0, cat: "Graded", tag: "PSA10", stock: 1 },
+  { id: "p6", name: "Common Bulk Lot (example)", value: 5.0, cost: 1.0, cat: "Bulk/Lots", tag: "BULK", stock: 8 },
+];
+
+const fmt = (n) => `$${n.toFixed(2)}`;
+let nextId = 100;
+
+const MODES = {
+  sell: { label: "Sell", verb: "Add to sale", icon: ShoppingBag, color: "#235349", bg: "#E4EFEC" },
+  buy: { label: "Buy", verb: "Add to buy", icon: Wallet, color: "#7A5210", bg: "#FBEED2" },
+  trade: { label: "Trade", verb: "Add to trade", icon: ArrowRightLeft, color: "#5B3E7A", bg: "#EEE6F5" },
+};
+
+function POS() {
+  const [view, setView] = useState("register"); // 'register' | 'history' | 'settings'
+  const [mode, setMode] = useState("sell");
+  const [category, setCategory] = useState("All");
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [products, setProducts] = useState(DEFAULT_PRODUCTS);
+  const [carts, setCarts] = useState({ sell: [], buy: [], trade: [] });
+  const [payMethod, setPayMethod] = useState(null);
+  const [cashGiven, setCashGiven] = useState("");
+  const [buyRatePct, setBuyRatePct] = useState(70);
+  const [tradeRatePct, setTradeRatePct] = useState(80);
+  const [receipt, setReceipt] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [creditBalance, setCreditBalance] = useState(0);
+  const [creditApplied, setCreditApplied] = useState(0);
+  const [cashOutAmount, setCashOutAmount] = useState(0);
+  const [note, setNote] = useState("");
+  const [funds, setFunds] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [saveError, setSaveError] = useState(false);
+
+  // Load saved data on mount
+  useEffect(() => {
+    async function load() {
+      try {
+        const configRes = await window.storage.get("pos-config", false);
+        if (configRes && configRes.value) {
+          const cfg = JSON.parse(configRes.value);
+          if (cfg.categories) setCategories(cfg.categories);
+          if (cfg.products) setProducts(cfg.products);
+          if (typeof cfg.buyRatePct === "number") setBuyRatePct(cfg.buyRatePct);
+          if (typeof cfg.tradeRatePct === "number") setTradeRatePct(cfg.tradeRatePct);
+          if (typeof cfg.creditBalance === "number") setCreditBalance(cfg.creditBalance);
+          if (typeof cfg.funds === "number") setFunds(cfg.funds);
+        }
+      } catch (e) {
+        // no saved config yet, keep defaults
+      }
+      try {
+        const historyRes = await window.storage.get("pos-history", false);
+        if (historyRes && historyRes.value) {
+          const h = JSON.parse(historyRes.value).map((s) => ({ ...s, time: new Date(s.time) }));
+          setHistory(h);
+        }
+      } catch (e) {
+        // no saved history yet
+      }
+      setLoaded(true);
+    }
+    load();
+  }, []);
+
+  // Save catalog/settings whenever they change (after initial load)
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        const result = await window.storage.set(
+          "pos-config",
+          JSON.stringify({ categories, products, buyRatePct, tradeRatePct, creditBalance, funds }),
+          false
+        );
+        setSaveError(!result);
+      } catch (e) {
+        setSaveError(true);
+      }
+    })();
+  }, [loaded, categories, products, buyRatePct, tradeRatePct, creditBalance, funds]);
+
+  // Save history whenever it changes (after initial load)
+  useEffect(() => {
+    if (!loaded) return;
+    (async () => {
+      try {
+        const result = await window.storage.set("pos-history", JSON.stringify(history), false);
+        setSaveError((prev) => prev || !result);
+      } catch (e) {
+        setSaveError(true);
+      }
+    })();
+  }, [loaded, history]);
+
+  const cart = carts[mode];
+
+  const visibleProducts =
+    category === "All" ? products : products.filter((p) => p.cat === category);
+
+  const rawTotal = useMemo(
+    () => cart.reduce((sum, i) => sum + i.value * i.qty, 0),
+    [cart]
+  );
+
+  function effectiveRatePct(item) {
+    if (item.customRatePct != null) return item.customRatePct;
+    return mode === "buy" ? buyRatePct : tradeRatePct;
+  }
+
+  const sellTotal = rawTotal;
+  const buyPayout = cart.reduce((s, i) => s + i.value * i.qty * (effectiveRatePct(i) / 100), 0);
+  const tradeCredit = cart.reduce((s, i) => s + i.value * i.qty * (effectiveRatePct(i) / 100), 0);
+  const total = mode === "sell" ? sellTotal : mode === "buy" ? buyPayout : tradeCredit;
+  const avgRatePct = rawTotal > 0 ? Math.round((total / rawTotal) * 100) : (mode === "buy" ? buyRatePct : tradeRatePct);
+  const maxApplicableCredit = Math.min(creditBalance, sellTotal);
+  const creditUsed = mode === "sell" ? Math.min(Math.max(creditApplied, 0), maxApplicableCredit) : 0;
+  const cashOutCapped = mode === "trade" ? Math.max(0, Math.min(cashOutAmount, total)) : 0;
+  const creditPortion = mode === "trade" ? total - cashOutCapped : total;
+  const dueAfterCredit = mode === "sell" ? Math.max(0, sellTotal - creditUsed) : total;
+
+  const cashNum = parseFloat(cashGiven) || 0;
+  const change = cashNum - dueAfterCredit;
+
+  function setCart(updater) {
+    setCarts((prev) => ({ ...prev, [mode]: updater(prev[mode]) }));
+  }
+
+  function addToCart(product) {
+    setCart((prev) => {
+      const existing = prev.find((i) => i.id === product.id);
+      const currentQty = existing ? existing.qty : 0;
+      if (mode === "sell" && typeof product.stock === "number" && currentQty >= product.stock) {
+        return prev; // out of stock, don't add more
+      }
+      if (existing) {
+        return prev.map((i) => (i.id === product.id ? { ...i, qty: i.qty + 1 } : i));
+      }
+      return [...prev, { ...product, qty: 1, origValue: product.value }];
+    });
+  }
+
+  function changeQty(id, delta) {
+    setCart((prev) =>
+      prev
+        .map((i) => {
+          if (i.id !== id) return i;
+          let newQty = i.qty + delta;
+          if (mode === "sell") {
+            const liveProduct = products.find((p) => p.id === id);
+            if (liveProduct && typeof liveProduct.stock === "number") {
+              newQty = Math.min(newQty, liveProduct.stock);
+            }
+          }
+          return { ...i, qty: newQty };
+        })
+        .filter((i) => i.qty > 0)
+    );
+  }
+
+  function removeItem(id) {
+    setCart((prev) => prev.filter((i) => i.id !== id));
+  }
+
+  function updatePrice(id, newPrice) {
+    setCart((prev) => prev.map((i) => (i.id === id ? { ...i, value: newPrice } : i)));
+  }
+
+  function updateItemRate(id, pct) {
+    setCart((prev) => prev.map((i) => (i.id === id ? { ...i, customRatePct: pct } : i)));
+  }
+
+  function clearSale() {
+    setCarts((prev) => ({ ...prev, [mode]: [] }));
+    setPayMethod(null);
+    setCashGiven("");
+    setCreditApplied(0);
+    setCashOutAmount(0);
+    setNote("");
+  }
+
+  function switchMode(m) {
+    setMode(m);
+    setPayMethod(null);
+    setCashGiven("");
+    setCreditApplied(0);
+    setCashOutAmount(0);
+    setNote("");
+  }
+
+  function addCustomItem({ name, value, cat, ratePct, url }) {
+    setCart((prev) => [
+      ...prev,
+      {
+        id: `custom-${Date.now()}`,
+        name,
+        value,
+        cat,
+        qty: 1,
+        tag: "CUSTOM",
+        customRatePct: ratePct,
+        url: url || "",
+      },
+    ]);
+  }
+
+  function completeTransaction() {
+    if (cart.length === 0) return;
+    if (mode === "sell" && dueAfterCredit > 0 && (!payMethod || (payMethod === "cash" && cashNum < dueAfterCredit))) return;
+
+    const costTotal = cart.reduce((s, i) => s + (i.cost || 0) * i.qty, 0);
+    const sale = {
+      id: Date.now(),
+      mode,
+      items: cart,
+      rawTotal,
+      total,
+      dueAfterCredit: mode === "sell" ? dueAfterCredit : null,
+      creditApplied: mode === "sell" ? creditUsed : 0,
+      cashOut: mode === "trade" ? cashOutCapped : 0,
+      creditIssued: mode === "trade" ? creditPortion : mode === "sell" ? null : total,
+      costTotal,
+      profit: mode === "sell" ? total - costTotal : null,
+      rate: mode === "buy" || mode === "trade" ? avgRatePct : null,
+      method: mode === "sell" ? (dueAfterCredit === 0 ? "credit" : payMethod) : "cash",
+      change: mode === "sell" && payMethod === "cash" ? change : 0,
+      note: note.trim(),
+      time: new Date(),
+    };
+    setHistory((h) => [sale, ...h]);
+    if (mode === "trade") setCreditBalance((b) => Math.round((b + creditPortion) * 100) / 100);
+    if (mode === "sell" && creditUsed > 0)
+      setCreditBalance((b) => Math.max(0, Math.round((b - creditUsed) * 100) / 100));
+    if (mode === "buy") setFunds((f) => f - total);
+    if (mode === "trade" && cashOutCapped > 0) setFunds((f) => f - cashOutCapped);
+    if (mode === "sell") setFunds((f) => f + dueAfterCredit);
+
+    if (mode === "sell") {
+      setProducts((prev) =>
+        prev
+          .map((p) => {
+            const soldItem = cart.find((i) => i.id === p.id);
+            if (!soldItem || typeof p.stock !== "number") return p;
+            return { ...p, stock: Math.max(0, p.stock - soldItem.qty) };
+          })
+          .filter((p) => typeof p.stock !== "number" || p.stock > 0)
+      );
+    }
+
+    if (mode === "buy" || mode === "trade") {
+      setProducts((prev) => {
+        const next = [...prev];
+        cart.forEach((item) => {
+          const paidEach = item.value * (effectiveRatePct(item) / 100);
+          const matchIdx = next.findIndex(
+            (p) => p.name.trim().toLowerCase() === item.name.trim().toLowerCase() && p.cat === item.cat
+          );
+          if (matchIdx >= 0) {
+            const existing = next[matchIdx];
+            const oldStock = existing.stock || 0;
+            const newStock = oldStock + item.qty;
+            const newCost =
+              newStock > 0 ? ((existing.cost || 0) * oldStock + paidEach * item.qty) / newStock : paidEach;
+            next[matchIdx] = {
+              ...existing,
+              stock: newStock,
+              cost: newCost,
+              url: item.url ? item.url : existing.url,
+            };
+          } else {
+            nextId += 1;
+            next.push({
+              id: `p${nextId}`,
+              name: item.name,
+              value: item.value,
+              cost: paidEach,
+              cat: item.cat,
+              stock: item.qty,
+              url: item.url || "",
+              tag: (item.tag && item.tag !== "CUSTOM" ? item.tag : item.name.slice(0, 4)).toUpperCase(),
+            });
+          }
+        });
+        return next;
+      });
+    }
+
+    setReceipt(sale);
+    clearSale();
+  }
+
+  const todayRevenue = history.filter((h) => h.mode === "sell").reduce((s, h) => s + h.total, 0);
+  const todayPayouts = history.filter((h) => h.mode === "buy").reduce((s, h) => s + h.total, 0);
+  const todayCredit = history.filter((h) => h.mode === "trade").reduce((s, h) => s + h.total, 0);
+
+  const activeMode = MODES[mode];
+  const ModeIcon = activeMode.icon;
+  const canComplete =
+    cart.length > 0 &&
+    (mode !== "sell" || dueAfterCredit === 0 || (payMethod && !(payMethod === "cash" && cashNum < dueAfterCredit)));
+
+  if (!loaded) {
+    return (
+      <div style={styles.app}>
+        <div style={styles.loadingWrap}>Loading your saved data…</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.app}>
+      {saveError && (
+        <div style={styles.saveErrorBanner}>
+          Couldn't save your latest changes — they're still here for now, but try again in a moment.
+        </div>
+      )}
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+        * { box-sizing: border-box; }
+        button { cursor: pointer; font-family: inherit; }
+        .prod-btn:hover { border-color: #23262B; transform: translateY(-1px); }
+        .prod-btn:active { transform: translateY(0); }
+        .cat-pill:hover { background: #23262B; color: #F5F6F3; }
+        .qty-btn:hover { background: #23262B; color: #F5F6F3; }
+        .pay-btn:hover { border-color: #23262B; }
+        .complete-btn:hover { filter: brightness(0.92); }
+        .nav-btn:hover { border-color: #23262B; }
+        .mode-tab:hover { border-color: #23262B; }
+        .icon-btn:hover { background: #F0EEE8; }
+        input[type=number]::-webkit-inner-spin-button { opacity: 0.5; }
+      `}</style>
+
+      {/* Header */}
+      <div style={styles.header}>
+        <div>
+          <div style={styles.logo}>CARD VENDOR POS</div>
+          <div style={styles.sub}>
+            {fmt(todayRevenue)} sold · {fmt(todayPayouts)} paid out · {fmt(todayCredit)} credit issued · {fmt(creditBalance)} credit balance
+          </div>
+        </div>
+        <div style={styles.navRow}>
+          <button
+            className="nav-btn"
+            style={{ ...styles.navBtn, ...(view === "register" ? styles.navBtnActive : {}) }}
+            onClick={() => setView("register")}
+          >
+            Register
+          </button>
+          <button
+            className="nav-btn"
+            style={{ ...styles.navBtn, ...(view === "history" ? styles.navBtnActive : {}) }}
+            onClick={() => setView("history")}
+          >
+            History
+          </button>
+          <button
+            className="nav-btn"
+            style={{ ...styles.navBtn, ...(view === "value" ? styles.navBtnActive : {}) }}
+            onClick={() => setView("value")}
+          >
+            Value
+          </button>
+          <button
+            className="nav-btn"
+            style={{ ...styles.navBtn, ...(view === "settings" ? styles.navBtnActive : {}) }}
+            onClick={() => setView("settings")}
+          >
+            <SettingsIcon size={13} style={{ marginRight: 4, verticalAlign: -2 }} />
+            Settings
+          </button>
+        </div>
+      </div>
+
+      {view === "history" && <HistoryView history={history} />}
+
+      {view === "value" && (
+        <ValueView
+          products={products}
+          categories={categories}
+          funds={funds}
+          creditBalance={creditBalance}
+        />
+      )}
+
+      {view === "settings" && (
+        <SettingsView
+          categories={categories}
+          setCategories={setCategories}
+          products={products}
+          setProducts={setProducts}
+          history={history}
+          setHistory={setHistory}
+        />
+      )}
+
+      {view === "register" && (
+        <>
+          {/* Mode tabs */}
+          <div style={styles.modeRow}>
+            {Object.entries(MODES).map(([key, m]) => {
+              const Icon = m.icon;
+              const active = mode === key;
+              return (
+                <button
+                  key={key}
+                  className="mode-tab"
+                  onClick={() => switchMode(key)}
+                  style={{
+                    ...styles.modeTab,
+                    borderColor: active ? m.color : BORDER,
+                    background: active ? m.bg : "#FFFFFF",
+                    color: active ? m.color : INK,
+                  }}
+                >
+                  <Icon size={15} />
+                  {m.label}
+                </button>
+              );
+            })}
+            {mode !== "sell" && (
+              <div style={styles.rateEditor}>
+                <span style={styles.rateLabel}>{mode === "buy" ? "Buy" : "Trade"} rate</span>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={mode === "buy" ? buyRatePct : tradeRatePct}
+                  onChange={(e) => {
+                    const v = Math.max(1, Math.min(100, parseInt(e.target.value) || 0));
+                    mode === "buy" ? setBuyRatePct(v) : setTradeRatePct(v);
+                  }}
+                  style={styles.rateInput}
+                />
+                <span style={styles.rateLabel}>% of value</span>
+              </div>
+            )}
+          </div>
+
+          <div style={styles.main}>
+            {/* Products */}
+            <div style={styles.productPane}>
+              {mode === "sell" ? (
+                <>
+                  <div style={styles.catRow}>
+                    <button
+                      className="cat-pill"
+                      onClick={() => setCategory("All")}
+                      style={{
+                        ...styles.catPill,
+                        background: category === "All" ? "#23262B" : "transparent",
+                        color: category === "All" ? "#F5F6F3" : "#23262B",
+                      }}
+                    >
+                      All
+                    </button>
+                    {categories.map((c) => (
+                      <button
+                        key={c}
+                        className="cat-pill"
+                        onClick={() => setCategory(c)}
+                        style={{
+                          ...styles.catPill,
+                          background: category === c ? "#23262B" : "transparent",
+                          color: category === c ? "#F5F6F3" : "#23262B",
+                        }}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                  {visibleProducts.length === 0 && (
+                    <div style={styles.emptyCart}>
+                      No products here yet. Add some in the Settings tab, or buy/trade something in to stock it.
+                    </div>
+                  )}
+                  <div style={styles.grid}>
+                    {visibleProducts.map((p) => {
+                      const inStock = typeof p.stock !== "number" || p.stock > 0;
+                      const inCartQty = cart.find((i) => i.id === p.id)?.qty || 0;
+                      const remaining = typeof p.stock === "number" ? p.stock - inCartQty : null;
+                      const atLimit = remaining !== null && remaining <= 0;
+                      const disabled = !inStock || atLimit;
+                      return (
+                        <div
+                          key={p.id}
+                          className="prod-btn"
+                          role="button"
+                          tabIndex={disabled ? -1 : 0}
+                          style={{ ...styles.prodBtn, ...(disabled ? styles.prodBtnDisabled : {}) }}
+                          onClick={() => !disabled && addToCart(p)}
+                          onKeyDown={(e) => {
+                            if (!disabled && (e.key === "Enter" || e.key === " ")) addToCart(p);
+                          }}
+                        >
+                          {p.url && (
+                            <button
+                              style={styles.prodLinkBtn}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                window.open(p.url, "_blank", "noopener,noreferrer");
+                              }}
+                              aria-label={`Open link for ${p.name}`}
+                            >
+                              <LinkIcon size={12} color={MUTED} />
+                            </button>
+                          )}
+                          <div style={styles.prodTag}>{p.tag}</div>
+                          <div style={styles.prodName}>{p.name}</div>
+                          <div style={styles.prodPrice}>{fmt(p.value)}</div>
+                          {typeof p.stock === "number" && (
+                            <div style={{ ...styles.stockLabel, color: atLimit ? "#B0413E" : MUTED }}>
+                              {p.stock === 0
+                                ? "Out of stock"
+                                : atLimit
+                                ? "All in cart"
+                                : `${remaining} in stock`}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <>
+                  {mode === "buy" && (
+                    <FundsTracker funds={funds} setFunds={setFunds} pendingSpend={total} />
+                  )}
+                  <div style={styles.modeIntro}>
+                    {mode === "buy"
+                      ? "Enter what you're buying from the customer. Once you complete the purchase, it's added to your Sell catalog automatically."
+                      : "Enter what you're taking in trade. Once you complete the trade, it's added to your Sell catalog automatically."}
+                  </div>
+                  <CustomItemPanel
+                    mode={mode}
+                    categories={categories}
+                    defaultRate={mode === "buy" ? buyRatePct : tradeRatePct}
+                    onAdd={(item) => addCustomItem(item)}
+                    forceOpen
+                  />
+                  {cart.length > 0 && (
+                    <div style={styles.pendingList}>
+                      <div style={styles.pendingHeading}>
+                        Added to this {mode} ({cart.length})
+                      </div>
+                      {cart.map((item, idx) => (
+                        <div
+                          key={item.id}
+                          style={{
+                            ...styles.pendingRow,
+                            borderBottom: idx === cart.length - 1 ? "none" : `1px solid ${BORDER}`,
+                          }}
+                        >
+                          <span style={styles.pendingName}>{item.qty}× {item.name}</span>
+                          <span style={styles.pendingCat}>{item.cat}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Cart / receipt panel */}
+            <div style={styles.cartPane}>
+              <div style={styles.cartCard}>
+                <div style={{ ...styles.cartHeader, color: activeMode.color }}>
+                  <ModeIcon size={13} style={{ marginRight: 5, verticalAlign: -2 }} />
+                  Current {activeMode.label.toLowerCase()}
+                </div>
+
+                <div style={styles.cartItems}>
+                  {cart.length === 0 && (
+                    <div style={styles.emptyCart}>
+                      Tap an item to {mode === "sell" ? "add it to the sale" : mode === "buy" ? "buy it from the customer" : "trade it in"}.
+                    </div>
+                  )}
+                  {cart.map((item) => {
+                    const lineRatePct = effectiveRatePct(item);
+                    const lineOffer = mode === "sell" ? item.value : item.value * (lineRatePct / 100);
+                    return (
+                      <div key={item.id} style={styles.cartRow}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={styles.cartItemName}>{item.name}</div>
+                          {mode === "sell" ? (
+                            <div style={styles.priceEditRow}>
+                              <span style={styles.priceEditDollar}>$</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={item.value}
+                                onChange={(e) => updatePrice(item.id, Math.max(0, parseFloat(e.target.value) || 0))}
+                                style={styles.priceEditInput}
+                              />
+                              <span style={styles.priceEditLabel}>each</span>
+                              {typeof item.origValue === "number" && item.value !== item.origValue && (
+                                <span style={styles.priceWasLabel}>was {fmt(item.origValue)}</span>
+                              )}
+                            </div>
+                          ) : (
+                            <div style={styles.rateEditRowSmall}>
+                              <span style={styles.cartItemUnit}>{fmt(item.value)} value ·</span>
+                              <input
+                                type="number"
+                                min="1"
+                                max="100"
+                                value={lineRatePct}
+                                onChange={(e) => {
+                                  const v = Math.max(1, Math.min(100, parseInt(e.target.value) || 0));
+                                  updateItemRate(item.id, v);
+                                }}
+                                style={styles.priceEditInput}
+                              />
+                              <span style={styles.cartItemUnit}>% = {fmt(lineOffer)} each</span>
+                            </div>
+                          )}
+                        </div>
+                        <div style={styles.qtyGroup}>
+                          <button className="qty-btn" style={styles.qtyBtn} onClick={() => changeQty(item.id, -1)}>
+                            <Minus size={12} />
+                          </button>
+                          <span style={styles.qtyNum}>{item.qty}</span>
+                          <button className="qty-btn" style={styles.qtyBtn} onClick={() => changeQty(item.id, 1)}>
+                            <Plus size={12} />
+                          </button>
+                        </div>
+                        <div style={styles.cartItemTotal}>{fmt(lineOffer * item.qty)}</div>
+                        <button style={styles.removeBtn} onClick={() => removeItem(item.id)} aria-label="Remove item">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={styles.totalsBlock}>
+                  {mode === "sell" && <Row label="Subtotal" value={fmt(rawTotal)} />}
+                  {mode !== "sell" && <Row label="Item value" value={fmt(rawTotal)} />}
+                  {mode !== "sell" && (
+                    <Row
+                      label={`${mode === "buy" ? "Buy" : "Trade"} rate (avg)`}
+                      value={`${avgRatePct}%`}
+                    />
+                  )}
+                  {mode === "sell" && creditUsed > 0 && (
+                    <Row label="Store credit applied" value={`− ${fmt(creditUsed)}`} />
+                  )}
+                  {mode === "trade" && cashOutCapped > 0 && (
+                    <>
+                      <Row label="Paid as cash" value={fmt(cashOutCapped)} />
+                      <Row label="Issued as credit" value={fmt(creditPortion)} />
+                    </>
+                  )}
+                  <div style={styles.totalRow}>
+                    <span>
+                      {mode === "sell" ? "Due now" : mode === "buy" ? "Cash to pay out" : "Trade value"}
+                    </span>
+                    <span>{fmt(mode === "sell" ? dueAfterCredit : total)}</span>
+                  </div>
+                </div>
+
+                {mode === "sell" && creditBalance >= 0.01 && cart.length > 0 && (
+                  <div style={styles.creditBox}>
+                    <div style={styles.creditBoxHeading}>
+                      Store credit available: {fmt(creditBalance)}
+                    </div>
+                    <div style={styles.creditApplyRow}>
+                      <span style={styles.priceEditDollar}>$</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max={maxApplicableCredit}
+                        step="0.01"
+                        value={creditApplied || ""}
+                        placeholder="0.00"
+                        onChange={(e) => setCreditApplied(Math.max(0, parseFloat(e.target.value) || 0))}
+                        style={styles.priceEditInput}
+                      />
+                      <button
+                        style={styles.creditMaxBtn}
+                        onClick={() => setCreditApplied(maxApplicableCredit)}
+                      >
+                        Use max
+                      </button>
+                      {creditApplied > 0 && (
+                        <button style={styles.creditClearBtn} onClick={() => setCreditApplied(0)}>
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {mode === "trade" && cart.length > 0 && (
+                  <div style={styles.creditBox}>
+                    <div style={styles.creditBoxHeading}>
+                      Doesn't want the rest as store credit? Pay some out as cash instead.
+                    </div>
+                    <div style={styles.creditApplyRow}>
+                      <span style={styles.priceEditDollar}>$</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max={total}
+                        step="0.01"
+                        value={cashOutAmount || ""}
+                        placeholder="0.00"
+                        onChange={(e) => setCashOutAmount(Math.max(0, parseFloat(e.target.value) || 0))}
+                        style={styles.priceEditInput}
+                      />
+                      <button style={styles.creditMaxBtn} onClick={() => setCashOutAmount(total)}>
+                        All as cash
+                      </button>
+                      {cashOutAmount > 0 && (
+                        <button style={styles.creditClearBtn} onClick={() => setCashOutAmount(0)}>
+                          Clear
+                        </button>
+                      )}
+                    </div>
+                    {cashOutCapped > funds && (
+                      <div style={styles.fundsWarning}>
+                        That's {fmt(cashOutCapped - funds)} more than you have in available funds.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {cart.length > 0 && (
+                  <div style={styles.payBlock}>
+                    {mode === "sell" && dueAfterCredit === 0 && (
+                      <div style={styles.creditCoveredNote}>
+                        Fully covered by store credit — no payment needed.
+                      </div>
+                    )}
+                    {mode === "sell" && dueAfterCredit > 0 && (
+                      <>
+                        <div style={styles.payButtons}>
+                          <button
+                            className="pay-btn"
+                            style={{ ...styles.payBtn, ...(payMethod === "cash" ? styles.payBtnActive : {}) }}
+                            onClick={() => setPayMethod("cash")}
+                          >
+                            Cash
+                          </button>
+                          <button
+                            className="pay-btn"
+                            style={{ ...styles.payBtn, ...(payMethod === "card" ? styles.payBtnActive : {}) }}
+                            onClick={() => { setPayMethod("card"); setCashGiven(""); }}
+                          >
+                            Card
+                          </button>
+                        </div>
+                        {payMethod === "cash" && (
+                          <div style={styles.cashRow}>
+                            <input
+                              type="number"
+                              placeholder="Cash received"
+                              value={cashGiven}
+                              onChange={(e) => setCashGiven(e.target.value)}
+                              style={styles.cashInput}
+                              min="0"
+                              step="0.01"
+                            />
+                            <div style={styles.changeText}>
+                              {cashNum > 0
+                                ? change >= 0
+                                  ? `Change due: ${fmt(change)}`
+                                  : `Need ${fmt(-change)} more`
+                                : "Enter amount tendered"}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    <div style={styles.noteBlock}>
+                      <label style={styles.noteLabel}>Note (optional)</label>
+                      <textarea
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        placeholder={
+                          mode === "sell"
+                            ? "e.g. customer name, discount reason…"
+                            : mode === "buy"
+                            ? "e.g. condition, seller name…"
+                            : "e.g. what they wanted in return…"
+                        }
+                        style={styles.noteInput}
+                        rows={2}
+                        maxLength={280}
+                      />
+                    </div>
+
+                    <button
+                      className="complete-btn"
+                      style={{
+                        ...styles.completeBtn,
+                        background: activeMode.color,
+                        opacity: canComplete ? 1 : 0.4,
+                        pointerEvents: canComplete ? "auto" : "none",
+                      }}
+                      onClick={completeTransaction}
+                    >
+                      <Check size={16} />
+                      {mode === "sell" && `Complete sale · ${fmt(dueAfterCredit)}`}
+                      {mode === "buy" && `Pay out ${fmt(total)} cash`}
+                      {mode === "trade" && cashOutCapped === 0 && `Issue ${fmt(total)} store credit`}
+                      {mode === "trade" && cashOutCapped > 0 && cashOutCapped < total &&
+                        `Issue ${fmt(creditPortion)} credit + pay ${fmt(cashOutCapped)} cash`}
+                      {mode === "trade" && cashOutCapped >= total && `Pay out ${fmt(cashOutCapped)} cash`}
+                    </button>
+
+                    <button style={styles.clearBtn} onClick={clearSale}>
+                      Clear {activeMode.label.toLowerCase()}
+                    </button>
+                  </div>
+                )}
+
+                <div style={styles.perforation}>
+                  {Array.from({ length: 26 }).map((_, i) => (
+                    <div key={i} style={styles.notch} />
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {receipt && <ReceiptModal sale={receipt} onClose={() => setReceipt(null)} />}
+    </div>
+  );
+}
+
+function FundsTracker({ funds, setFunds, pendingSpend }) {
+  const [adding, setAdding] = useState(false);
+  const [amount, setAmount] = useState("");
+
+  const afterSpend = funds - (pendingSpend || 0);
+  const overBudget = pendingSpend > 0 && pendingSpend > funds;
+
+  function submitAdd() {
+    const v = parseFloat(amount);
+    if (isNaN(v) || v === 0) return;
+    setFunds((f) => f + v);
+    setAmount("");
+    setAdding(false);
+  }
+
+  return (
+    <div style={styles.fundsBox}>
+      <div style={styles.fundsRow}>
+        <div>
+          <div style={styles.fundsLabel}>Available funds</div>
+          <div style={styles.fundsValue}>{fmt(funds)}</div>
+        </div>
+        {!adding ? (
+          <button style={styles.fundsAddBtn} onClick={() => setAdding(true)}>
+            <Plus size={13} /> Add / remove funds
+          </button>
+        ) : (
+          <div style={styles.fundsAddRow}>
+            <input
+              type="number"
+              step="0.01"
+              placeholder="+50 or -20"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              style={styles.fundsAddInput}
+              autoFocus
+              onKeyDown={(e) => e.key === "Enter" && submitAdd()}
+            />
+            <button style={styles.fundsAddConfirm} onClick={submitAdd}>Save</button>
+            <button style={styles.fundsAddCancel} onClick={() => { setAdding(false); setAmount(""); }}>
+              <X size={13} />
+            </button>
+          </div>
+        )}
+      </div>
+      {pendingSpend > 0 && (
+        <div style={{ ...styles.fundsNote, color: overBudget ? "#B0413E" : MUTED }}>
+          {overBudget
+            ? `This buy (${fmt(pendingSpend)}) is ${fmt(pendingSpend - funds)} over your available funds.`
+            : `After this buy: ${fmt(afterSpend)} left`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
+  const [open, setOpen] = useState(!!forceOpen);
+  const [cat, setCat] = useState(categories[0] || "");
+  const [name, setName] = useState("");
+  const [value, setValue] = useState("");
+  const [ratePct, setRatePct] = useState(defaultRate);
+  const [url, setUrl] = useState("");
+
+  function openPanel() {
+    setCat((c) => c || categories[0] || "");
+    setRatePct(defaultRate);
+    setOpen(true);
+  }
+
+  function closePanel() {
+    if (!forceOpen) setOpen(false);
+    setName("");
+    setValue("");
+    setRatePct(defaultRate);
+    setUrl("");
+  }
+
+  function submit() {
+    const cleanName = name.trim();
+    const v = parseFloat(value);
+    if (!cat || !cleanName || isNaN(v) || v < 0) return;
+    onAdd({ name: cleanName, value: v, cat, ratePct: Math.max(1, Math.min(100, ratePct || 1)), url: url.trim() });
+    closePanel();
+  }
+
+  if (!open) {
+    return (
+      <button className="prod-btn" style={styles.customTile} onClick={openPanel}>
+        <Plus size={16} />
+        <span>Add item not in catalog</span>
+      </button>
+    );
+  }
+
+  const marketValueNum = parseFloat(value) || 0;
+  const offerPreview = marketValueNum * (ratePct / 100);
+
+  return (
+    <div style={styles.customPanel}>
+      <div style={styles.customPanelHeading}>
+        {mode === "buy" ? "Buy an item from a customer" : "Trade in an item"}
+      </div>
+
+      <label style={styles.customLabel}>1. Category</label>
+      <select style={styles.customInput} value={cat} onChange={(e) => setCat(e.target.value)}>
+        {categories.map((c) => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+      </select>
+
+      <label style={styles.customLabel}>2. What is it?</label>
+      <input
+        style={styles.customInput}
+        placeholder="e.g. Blastoise 1st Edition"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        autoFocus
+      />
+
+      <label style={styles.customLabel}>3. Market value</label>
+      <div style={styles.customValueRow}>
+        <span style={styles.priceEditDollar}>$</span>
+        <input
+          style={styles.customInput}
+          type="number"
+          step="0.01"
+          min="0"
+          placeholder="0.00"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+      </div>
+
+      <label style={styles.customLabel}>4. % of value to offer</label>
+      <div style={styles.customRateRow}>
+        <input
+          type="range"
+          min="1"
+          max="100"
+          value={ratePct}
+          onChange={(e) => setRatePct(parseInt(e.target.value))}
+          style={styles.customSlider}
+        />
+        <span style={styles.customRateValue}>{Math.round(ratePct)}%</span>
+      </div>
+
+      <label style={styles.customLabel}>
+        Or type an exact {mode === "buy" ? "cash offer" : "offer"}
+      </label>
+      <div style={styles.customOfferRow}>
+        <span style={styles.priceEditDollar}>$</span>
+        <input
+          style={{ ...styles.customInput, width: "auto", flex: 1, minWidth: 0 }}
+          type="number"
+          step="0.01"
+          min="0"
+          disabled={!marketValueNum}
+          placeholder={marketValueNum ? "0.00" : "Enter market value first"}
+          value={marketValueNum ? offerPreview.toFixed(2) : ""}
+          onChange={(e) => {
+            const typed = parseFloat(e.target.value);
+            if (!marketValueNum) return;
+            if (isNaN(typed)) return;
+            const newPct = Math.max(1, Math.min(100, (typed / marketValueNum) * 100));
+            setRatePct(newPct);
+          }}
+        />
+        <span style={styles.customOfferSuffix}>{mode === "buy" ? "cash" : "store credit"}</span>
+      </div>
+
+      <label style={styles.customLabel}>5. Link (optional)</label>
+      <input
+        style={styles.customInput}
+        type="url"
+        placeholder="Paste a listing or price-check link"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+      />
+
+      <div style={styles.customButtonRow}>
+        <button style={styles.customCancelBtn} onClick={closePanel}>
+          {forceOpen ? "Clear form" : "Cancel"}
+        </button>
+        <button style={styles.customAddBtn} onClick={submit}>
+          <Plus size={14} /> Add to {mode}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, value }) {
+  return (
+    <div style={styles.rowLine}>
+      <span style={{ color: "#6B6E68" }}>{label}</span>
+      <span>{value}</span>
+    </div>
+  );
+}
+
+function HistoryView({ history }) {
+  const sells = history.filter((h) => h.mode === "sell");
+  const buys = history.filter((h) => h.mode === "buy");
+  const trades = history.filter((h) => h.mode === "trade");
+
+  const totalSold = sells.reduce((s, h) => s + h.total, 0);
+  const totalCost = sells.reduce((s, h) => s + h.costTotal, 0);
+  const totalProfit = sells.reduce((s, h) => s + (h.profit || 0), 0);
+  const totalPaidOut = buys.reduce((s, h) => s + h.total, 0);
+  const totalCredit = trades.reduce((s, h) => s + h.total, 0);
+  const marginPct = totalSold > 0 ? (totalProfit / totalSold) * 100 : 0;
+
+  return (
+    <div style={styles.historyWrap}>
+      {history.length === 0 ? (
+        <div style={styles.emptyCart}>No transactions yet today.</div>
+      ) : (
+        <>
+          <div style={styles.totalsGrid}>
+            <TotalStat label="Sold" value={fmt(totalSold)} color={MODES.sell.color} />
+            <TotalStat label="Cost of goods" value={fmt(totalCost)} color={MUTED} />
+            <TotalStat
+              label="Profit"
+              value={`${fmt(totalProfit)} (${marginPct.toFixed(0)}%)`}
+              color={totalProfit >= 0 ? TEAL : "#B0413E"}
+            />
+            <TotalStat label="Paid out" value={fmt(totalPaidOut)} color={MODES.buy.color} />
+            <TotalStat label="Credit issued" value={fmt(totalCredit)} color={MODES.trade.color} />
+          </div>
+
+          <div style={styles.historyList}>
+            {history.map((sale) => {
+              const m = MODES[sale.mode];
+              return (
+                <div key={sale.id} style={styles.historyRow}>
+                  <div>
+                    <div style={styles.historyTime}>
+                      {sale.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </div>
+                    <div style={styles.historyItems}>
+                      {sale.items.map((i, idx) => (
+                        <span key={i.id || idx}>
+                          {idx > 0 && ", "}
+                          {i.qty}× {i.name}
+                          {sale.mode === "sell" &&
+                            typeof i.origValue === "number" &&
+                            i.origValue !== i.value && (
+                              <span style={styles.historyPriceAdjusted}>
+                                {" "}
+                                (was {fmt(i.origValue)}, sold {fmt(i.value)})
+                              </span>
+                            )}
+                        </span>
+                      ))}
+                    </div>
+                    {sale.mode === "sell" && (
+                      <div style={{ ...styles.historyMargin, color: sale.profit >= 0 ? TEAL : "#B0413E" }}>
+                        {fmt(sale.profit)} profit
+                        {sale.total > 0 && ` (${((sale.profit / sale.total) * 100).toFixed(0)}%)`}
+                      </div>
+                    )}
+                    {sale.mode === "sell" && sale.creditApplied > 0 && (
+                      <div style={styles.historyCreditNote}>
+                        {fmt(sale.creditApplied)} paid with store credit
+                      </div>
+                    )}
+                    {sale.note && <div style={styles.historyNote}>"{sale.note}"</div>}
+                  </div>
+                  <div style={styles.historyMeta}>
+                    <span style={{ ...styles.historyMethod, color: m.color, background: m.bg }}>
+                      {m.label}{sale.rate ? ` · ${sale.rate}%` : ""}
+                    </span>
+                    <span style={styles.historyTotal}>{fmt(sale.total)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ValueView({ products, categories, funds, creditBalance }) {
+  const inventoryValue = products.reduce((s, p) => s + (p.stock || 0) * p.value, 0);
+  const inventoryCost = products.reduce((s, p) => s + (p.stock || 0) * (p.cost || 0), 0);
+  const potentialProfit = inventoryValue - inventoryCost;
+  const totalItems = products.reduce((s, p) => s + (p.stock || 0), 0);
+  const netPosition = funds + inventoryValue - creditBalance;
+
+  const byCategory = categories.map((c) => {
+    const catProducts = products.filter((p) => p.cat === c);
+    const items = catProducts.reduce((s, p) => s + (p.stock || 0), 0);
+    const value = catProducts.reduce((s, p) => s + (p.stock || 0) * p.value, 0);
+    const cost = catProducts.reduce((s, p) => s + (p.stock || 0) * (p.cost || 0), 0);
+    return { name: c, items, value, cost, profit: value - cost };
+  });
+
+  return (
+    <div style={styles.historyWrap}>
+      <div style={styles.totalsGrid}>
+        <TotalStat label="Available funds" value={fmt(funds)} color={MODES.buy.color} />
+        <TotalStat label="Store credit owed" value={fmt(creditBalance)} color={MODES.trade.color} />
+        <TotalStat label="Inventory value" value={fmt(inventoryValue)} color={MODES.sell.color} />
+        <TotalStat label="Inventory cost" value={fmt(inventoryCost)} color={MUTED} />
+        <TotalStat
+          label="Potential profit"
+          value={fmt(potentialProfit)}
+          color={potentialProfit >= 0 ? TEAL : "#B0413E"}
+        />
+      </div>
+
+      <div style={styles.valueNetRow}>
+        <span style={styles.valueNetLabel}>
+          Net position (funds + inventory value − credit owed)
+        </span>
+        <span style={{ ...styles.valueNetAmount, color: netPosition >= 0 ? TEAL : "#B0413E" }}>
+          {fmt(netPosition)}
+        </span>
+      </div>
+
+      <div style={styles.settingsHeading2}>By category ({totalItems} items in stock)</div>
+      {byCategory.length === 0 ? (
+        <div style={styles.emptyCart}>No categories yet.</div>
+      ) : (
+        <div style={styles.catValueTable}>
+          <div style={styles.catValueHead}>
+            <span style={{ flex: 2 }}>Category</span>
+            <span style={{ width: 60 }}>Items</span>
+            <span style={{ width: 90 }}>Value</span>
+            <span style={{ width: 90 }}>Cost</span>
+            <span style={{ width: 90 }}>Profit</span>
+          </div>
+          {byCategory.map((c) => (
+            <div key={c.name} style={styles.catValueRow}>
+              <span style={{ flex: 2, fontWeight: 500 }}>{c.name}</span>
+              <span style={{ width: 60, color: MUTED }}>{c.items}</span>
+              <span style={{ width: 90, fontFamily: "'IBM Plex Mono', monospace" }}>{fmt(c.value)}</span>
+              <span style={{ width: 90, fontFamily: "'IBM Plex Mono', monospace", color: MUTED }}>
+                {fmt(c.cost)}
+              </span>
+              <span
+                style={{
+                  width: 90,
+                  fontFamily: "'IBM Plex Mono', monospace",
+                  fontWeight: 600,
+                  color: c.profit >= 0 ? TEAL : "#B0413E",
+                }}
+              >
+                {fmt(c.profit)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TotalStat({ label, value, color }) {
+  return (
+    <div style={styles.totalStat}>
+      <div style={styles.totalStatLabel}>{label}</div>
+      <div style={{ ...styles.totalStatValue, color }}>{value}</div>
+    </div>
+  );
+}
+
+function ReceiptModal({ sale, onClose }) {
+  const m = MODES[sale.mode];
+  const titles = { sell: "Sale complete", buy: "Purchase complete", trade: "Trade complete" };
+  const subtitles = {
+    sell: sale.method === "credit" ? "paid with store credit" : `paid by ${sale.method}`,
+    buy: "cash paid to customer",
+    trade: sale.cashOut > 0 ? "part cash, part store credit" : "store credit issued",
+  };
+  return (
+    <div style={styles.overlay}>
+      <div style={styles.receiptCard}>
+        <button style={styles.closeBtn} onClick={onClose} aria-label="Close receipt">
+          <X size={16} />
+        </button>
+        <Receipt size={22} style={{ marginBottom: 8, color: m.color }} />
+        <div style={styles.receiptTitle}>{titles[sale.mode]}</div>
+        <div style={styles.receiptSub}>
+          {sale.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {subtitles[sale.mode]}
+        </div>
+        {sale.note && <div style={styles.receiptNote}>"{sale.note}"</div>}
+        <div style={styles.receiptItems}>
+          {sale.items.map((i) => {
+            const rate = sale.mode === "buy" || sale.mode === "trade" ? sale.rate / 100 : 1;
+            const lineTotal = i.value * i.qty * rate;
+            const wasAdjusted =
+              sale.mode === "sell" && typeof i.origValue === "number" && i.origValue !== i.value;
+            return (
+              <div key={i.id} style={styles.receiptLine}>
+                <span>
+                  {i.qty}× {i.name}
+                  {wasAdjusted && (
+                    <span style={styles.receiptAdjustedNote}> (was {fmt(i.origValue)})</span>
+                  )}
+                </span>
+                <span>{fmt(lineTotal)}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div style={styles.totalsBlock}>
+          <Row label="Item value" value={fmt(sale.rawTotal)} />
+          {sale.rate && <Row label={`${m.label} rate`} value={`${sale.rate}%`} />}
+          {sale.mode === "sell" && sale.creditApplied > 0 && (
+            <Row label="Store credit applied" value={`− ${fmt(sale.creditApplied)}`} />
+          )}
+          {sale.mode === "trade" && sale.cashOut > 0 && (
+            <>
+              <Row label="Paid as cash" value={fmt(sale.cashOut)} />
+              <Row label="Issued as credit" value={fmt(sale.creditIssued)} />
+            </>
+          )}
+          <div style={styles.totalRow}>
+            <span>
+              {sale.mode === "sell" ? "Due" : sale.mode === "buy" ? "Cash paid" : "Trade value"}
+            </span>
+            <span>{fmt(sale.mode === "sell" ? sale.dueAfterCredit : sale.total)}</span>
+          </div>
+          {sale.mode === "sell" && sale.method === "cash" && (
+            <Row label="Change given" value={fmt(sale.change)} />
+          )}
+        </div>
+        <button style={{ ...styles.newSaleBtn, background: m.color }} onClick={onClose}>
+          Start next transaction
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({ categories, setCategories, products, setProducts, history, setHistory }) {
+  const [newCat, setNewCat] = useState("");
+  const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "" });
+  const [confirmingReset, setConfirmingReset] = useState(false);
+
+  function renameCategory(oldName, newName) {
+    const clean = newName.trim();
+    if (!clean || clean === oldName) return;
+    setCategories((prev) => prev.map((c) => (c === oldName ? clean : c)));
+    setProducts((prev) => prev.map((p) => (p.cat === oldName ? { ...p, cat: clean } : p)));
+  }
+
+  function deleteCategory(name) {
+    const remaining = categories.filter((c) => c !== name);
+    setCategories(remaining);
+    const fallback = remaining[0] || "Uncategorized";
+    setProducts((prev) => prev.map((p) => (p.cat === name ? { ...p, cat: fallback } : p)));
+  }
+
+  function addCategory() {
+    const clean = newCat.trim();
+    if (!clean || categories.includes(clean)) return;
+    setCategories((prev) => [...prev, clean]);
+    setNewCat("");
+  }
+
+  function updateProduct(id, field, val) {
+    setProducts((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: val } : p)));
+  }
+
+  function deleteProduct(id) {
+    setProducts((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  function addProduct() {
+    const name = draft.name.trim();
+    const value = parseFloat(draft.value);
+    const cost = draft.cost === "" ? 0 : parseFloat(draft.cost);
+    const stock = draft.stock === "" ? 0 : parseInt(draft.stock);
+    if (!name || isNaN(value) || value < 0 || !draft.cat) return;
+    nextId += 1;
+    setProducts((prev) => [
+      ...prev,
+      {
+        id: `p${nextId}`,
+        name,
+        value,
+        cost: isNaN(cost) ? 0 : cost,
+        stock: isNaN(stock) ? 0 : Math.max(0, stock),
+        cat: draft.cat,
+        tag: draft.tag.trim().slice(0, 4).toUpperCase() || "—",
+        url: draft.url.trim(),
+      },
+    ]);
+    setDraft({ name: "", value: "", cost: "", stock: "", cat: draft.cat, tag: "", url: "" });
+  }
+
+  return (
+    <div style={styles.settingsWrap}>
+      {/* Categories */}
+      <div style={styles.settingsSection}>
+        <div style={styles.settingsHeading}>Categories</div>
+        <div style={styles.catEditList}>
+          {categories.map((c) => (
+            <div key={c} style={styles.catEditRow}>
+              <Pencil size={12} color={MUTED} />
+              <input
+                style={styles.catEditInput}
+                defaultValue={c}
+                onBlur={(e) => renameCategory(c, e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && e.target.blur()}
+              />
+              <button className="icon-btn" style={styles.iconBtn} onClick={() => deleteCategory(c)} aria-label={`Delete ${c}`}>
+                <Trash2 size={14} color={MUTED} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div style={styles.addRow}>
+          <input
+            style={styles.addInput}
+            placeholder="New category name"
+            value={newCat}
+            onChange={(e) => setNewCat(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addCategory()}
+          />
+          <button style={styles.addBtn} onClick={addCategory}>
+            <Plus size={14} /> Add category
+          </button>
+        </div>
+      </div>
+
+      {/* Products */}
+      <div style={styles.settingsSection}>
+        <div style={styles.settingsHeading}>Products</div>
+        <div style={styles.productTable}>
+          <div style={styles.productTableHead}>
+            <span style={{ flex: 2 }}>Name</span>
+            <span style={{ width: 80 }}>Cost</span>
+            <span style={{ width: 80 }}>Value</span>
+            <span style={{ width: 70 }}>Margin</span>
+            <span style={{ width: 60 }}>Stock</span>
+            <span style={{ width: 130 }}>Category</span>
+            <span style={{ width: 56 }}>Tag</span>
+            <span style={{ width: 140 }}>Link</span>
+            <span style={{ width: 32 }} />
+          </div>
+          {products.map((p) => {
+            const cost = p.cost || 0;
+            const margin = p.value - cost;
+            const marginPct = p.value > 0 ? (margin / p.value) * 100 : 0;
+            return (
+              <div key={p.id} style={styles.productTableRow}>
+                <input
+                  style={{ ...styles.tableInput, flex: 2 }}
+                  defaultValue={p.name}
+                  onBlur={(e) => updateProduct(p.id, "name", e.target.value)}
+                />
+                <input
+                  style={{ ...styles.tableInput, width: 80 }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={p.cost}
+                  onBlur={(e) => updateProduct(p.id, "cost", parseFloat(e.target.value) || 0)}
+                />
+                <input
+                  style={{ ...styles.tableInput, width: 80 }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={p.value}
+                  onBlur={(e) => updateProduct(p.id, "value", parseFloat(e.target.value) || 0)}
+                />
+                <span style={{ ...styles.marginTag, color: margin >= 0 ? TEAL : "#B0413E" }}>
+                  {fmt(margin)}
+                  <span style={styles.marginPct}> ({marginPct.toFixed(0)}%)</span>
+                </span>
+                <input
+                  style={{ ...styles.tableInput, width: 60 }}
+                  type="number"
+                  step="1"
+                  min="0"
+                  defaultValue={p.stock ?? 0}
+                  onBlur={(e) => updateProduct(p.id, "stock", Math.max(0, parseInt(e.target.value) || 0))}
+                />
+                <select
+                  style={{ ...styles.tableInput, width: 130 }}
+                  value={p.cat}
+                  onChange={(e) => updateProduct(p.id, "cat", e.target.value)}
+                >
+                  {categories.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                <input
+                  style={{ ...styles.tableInput, width: 56, textTransform: "uppercase" }}
+                  defaultValue={p.tag}
+                  maxLength={4}
+                  onBlur={(e) => updateProduct(p.id, "tag", e.target.value.toUpperCase())}
+                />
+                <div style={styles.linkCell}>
+                  <input
+                    style={{ ...styles.tableInput, width: 100 }}
+                    type="url"
+                    placeholder="Paste link"
+                    defaultValue={p.url || ""}
+                    onBlur={(e) => updateProduct(p.id, "url", e.target.value.trim())}
+                  />
+                  <button
+                    className="icon-btn"
+                    style={{ ...styles.iconBtn, width: 32, opacity: p.url ? 1 : 0.3 }}
+                    onClick={() => p.url && window.open(p.url, "_blank", "noopener,noreferrer")}
+                    disabled={!p.url}
+                    aria-label={`Open link for ${p.name}`}
+                  >
+                    <LinkIcon size={13} color={MUTED} />
+                  </button>
+                </div>
+                <button
+                  className="icon-btn"
+                  style={{ ...styles.iconBtn, width: 32 }}
+                  onClick={() => deleteProduct(p.id)}
+                  aria-label={`Delete ${p.name}`}
+                >
+                  <Trash2 size={14} color={MUTED} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={styles.addProductRow}>
+          <input
+            style={{ ...styles.tableInput, flex: 2 }}
+            placeholder="New product name"
+            value={draft.name}
+            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+          />
+          <input
+            style={{ ...styles.tableInput, width: 80 }}
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="Cost"
+            value={draft.cost}
+            onChange={(e) => setDraft({ ...draft, cost: e.target.value })}
+          />
+          <input
+            style={{ ...styles.tableInput, width: 80 }}
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="Value"
+            value={draft.value}
+            onChange={(e) => setDraft({ ...draft, value: e.target.value })}
+          />
+          <span style={{ width: 70 }} />
+          <input
+            style={{ ...styles.tableInput, width: 60 }}
+            type="number"
+            step="1"
+            min="0"
+            placeholder="Stock"
+            value={draft.stock}
+            onChange={(e) => setDraft({ ...draft, stock: e.target.value })}
+          />
+          <select
+            style={{ ...styles.tableInput, width: 130 }}
+            value={draft.cat}
+            onChange={(e) => setDraft({ ...draft, cat: e.target.value })}
+          >
+            {categories.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <input
+            style={{ ...styles.tableInput, width: 56 }}
+            placeholder="TAG"
+            value={draft.tag}
+            onChange={(e) => setDraft({ ...draft, tag: e.target.value })}
+            maxLength={4}
+          />
+          <input
+            style={{ ...styles.tableInput, width: 140 }}
+            type="url"
+            placeholder="Link (optional)"
+            value={draft.url}
+            onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+          />
+          <button style={styles.addBtn} onClick={addProduct}>
+            <Plus size={14} /> Add
+          </button>
+        </div>
+      </div>
+
+      <div style={styles.settingsSection}>
+        <div style={styles.settingsHeading}>Data</div>
+        <div style={styles.dataNote}>
+          Your catalog and sales history are saved automatically and will still be here next time you open this.
+        </div>
+        {!confirmingReset ? (
+          <button style={styles.resetBtn} onClick={() => setConfirmingReset(true)}>
+            Clear all sales history
+          </button>
+        ) : (
+          <div style={styles.resetConfirmRow}>
+            <span style={styles.resetConfirmText}>Clear all sales history? This can't be undone.</span>
+            <button
+              style={styles.resetConfirmBtn}
+              onClick={() => { setHistory([]); setConfirmingReset(false); }}
+            >
+              Yes, clear it
+            </button>
+            <button style={styles.resetCancelBtn} onClick={() => setConfirmingReset(false)}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const INK = "#23262B";
+const PAPER = "#F5F6F3";
+const AMBER_DARK = "#7A5210";
+const TEAL = "#235349";
+const MUTED = "#6B6E68";
+const BORDER = "#DAD8D0";
+
+const styles = {
+  app: {
+    fontFamily: "'Inter', sans-serif",
+    background: PAPER,
+    color: INK,
+    minHeight: 500,
+    padding: 20,
+    maxWidth: 980,
+    margin: "0 auto",
+  },
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-end",
+    marginBottom: 16,
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  logo: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontWeight: 600,
+    fontSize: 18,
+    letterSpacing: "0.02em",
+  },
+  sub: { fontSize: 12.5, color: MUTED, marginTop: 3 },
+  navRow: { display: "flex", gap: 6 },
+  navBtn: {
+    border: `1px solid ${BORDER}`,
+    background: "#FFFFFF",
+    color: INK,
+    borderRadius: 7,
+    padding: "7px 12px",
+    fontSize: 12.5,
+    fontWeight: 600,
+    transition: "border-color 0.12s",
+  },
+  navBtnActive: { borderColor: INK, background: INK, color: PAPER },
+  modeRow: { display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" },
+  modeTab: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    border: `1px solid ${BORDER}`,
+    borderRadius: 8,
+    padding: "8px 14px",
+    fontSize: 13,
+    fontWeight: 600,
+    transition: "border-color 0.12s",
+  },
+  rateEditor: { display: "flex", alignItems: "center", gap: 6, marginLeft: 6 },
+  rateLabel: { fontSize: 12, color: MUTED },
+  rateInput: {
+    width: 48,
+    padding: "5px 6px",
+    borderRadius: 6,
+    border: `1px solid ${BORDER}`,
+    fontSize: 12.5,
+    fontFamily: "'IBM Plex Mono', monospace",
+    textAlign: "center",
+  },
+  main: {
+    display: "grid",
+    gridTemplateColumns: "1.5fr 1fr",
+    gap: 20,
+    alignItems: "start",
+  },
+  productPane: {},
+  modeIntro: { fontSize: 13, color: MUTED, marginBottom: 14, lineHeight: 1.5, maxWidth: 420 },
+  fundsBox: {
+    background: "#FFFFFF",
+    border: `1px solid ${BORDER}`,
+    borderRadius: 10,
+    padding: "14px 16px",
+    marginBottom: 16,
+  },
+  fundsRow: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 },
+  fundsLabel: {
+    fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: "0.04em", fontWeight: 600, marginBottom: 3,
+  },
+  fundsValue: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 22, fontWeight: 600, color: MODES.buy.color },
+  fundsAddBtn: {
+    display: "flex", alignItems: "center", gap: 5, background: "none", border: `1px solid ${BORDER}`,
+    borderRadius: 7, padding: "7px 12px", fontSize: 12.5, fontWeight: 500, color: INK,
+  },
+  fundsAddRow: { display: "flex", alignItems: "center", gap: 6 },
+  fundsAddInput: {
+    width: 110, padding: "7px 9px", borderRadius: 7, border: `1px solid ${BORDER}`,
+    fontSize: 13, fontFamily: "'IBM Plex Mono', monospace",
+  },
+  fundsAddConfirm: {
+    background: INK, color: PAPER, border: "none", borderRadius: 7, padding: "7px 12px", fontSize: 12.5, fontWeight: 600,
+  },
+  fundsAddCancel: {
+    background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "7px 8px", color: MUTED,
+  },
+  fundsNote: { fontSize: 12, marginTop: 10, fontWeight: 500 },
+  pendingList: {
+    marginTop: 16,
+    background: "#FFFFFF",
+    border: `1px solid ${BORDER}`,
+    borderRadius: 10,
+    padding: 14,
+  },
+  pendingHeading: {
+    fontSize: 11.5, fontWeight: 600, color: MUTED, textTransform: "uppercase",
+    letterSpacing: "0.04em", marginBottom: 8,
+  },
+  pendingRow: {
+    display: "flex", justifyContent: "space-between", fontSize: 13, padding: "5px 0",
+    borderBottom: `1px solid ${BORDER}`,
+  },
+  pendingName: { fontWeight: 500 },
+  pendingCat: { color: MUTED, fontSize: 12 },
+  catRow: { display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" },
+  catPill: {
+    border: `1px solid ${INK}`,
+    borderRadius: 20,
+    padding: "6px 14px",
+    fontSize: 13,
+    fontWeight: 500,
+    transition: "background 0.15s, color 0.15s",
+  },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))",
+    gap: 10,
+  },
+  prodBtn: {
+    background: "#FFFFFF",
+    border: `1px solid ${BORDER}`,
+    borderRadius: 10,
+    padding: "14px 12px",
+    textAlign: "left",
+    transition: "border-color 0.12s, transform 0.12s",
+    cursor: "pointer",
+    position: "relative",
+  },
+  prodLinkBtn: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    border: `1px solid ${BORDER}`,
+    background: "#FFFFFF",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    padding: 0,
+  },
+  prodTag: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 10,
+    fontWeight: 600,
+    color: AMBER_DARK,
+    background: "#FBEED2",
+    display: "inline-block",
+    padding: "2px 6px",
+    borderRadius: 4,
+    marginBottom: 8,
+  },
+  prodName: { fontSize: 13.5, fontWeight: 500, marginBottom: 4 },
+  prodPrice: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: MUTED },
+  stockLabel: { fontSize: 10.5, fontFamily: "'IBM Plex Mono', monospace", marginTop: 4 },
+  prodBtnDisabled: { opacity: 0.45, cursor: "not-allowed" },
+  prodPriceRow: { display: "flex", alignItems: "baseline", gap: 6 },
+  prodValueStrike: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 11.5,
+    color: MUTED,
+    textDecoration: "line-through",
+  },
+  prodOffer: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600 },
+  customTile: {
+    width: "100%",
+    background: "none",
+    border: `1.5px dashed ${BORDER}`,
+    borderRadius: 10,
+    padding: "12px 14px",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    color: MUTED,
+    fontSize: 13,
+    fontWeight: 500,
+    marginBottom: 12,
+  },
+  customPanel: {
+    background: "#FFFFFF",
+    border: `1px solid ${BORDER}`,
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 14,
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+  },
+  customPanelHeading: { fontSize: 13.5, fontWeight: 600, marginBottom: 8 },
+  customLabel: { fontSize: 11.5, color: MUTED, fontWeight: 600, marginTop: 8, marginBottom: 4 },
+  customInput: {
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 7,
+    border: `1px solid ${BORDER}`,
+    fontSize: 13.5,
+    fontFamily: "'Inter', sans-serif",
+    background: "#FFFFFF",
+  },
+  customValueRow: { display: "flex", alignItems: "center", gap: 6 },
+  customRateRow: { display: "flex", alignItems: "center", gap: 10 },
+  customSlider: { flex: 1, accentColor: INK },
+  customRateValue: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 13,
+    fontWeight: 600,
+    minWidth: 38,
+    textAlign: "right",
+  },
+  customPreview: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 12.5,
+    color: TEAL,
+    fontWeight: 600,
+    marginTop: 10,
+  },
+  customOfferRow: { display: "flex", alignItems: "center", gap: 6, marginTop: 4 },
+  customOfferSuffix: { fontSize: 12.5, color: MUTED, whiteSpace: "nowrap" },
+  customButtonRow: { display: "flex", gap: 8, marginTop: 12 },
+  customCancelBtn: {
+    flex: 1,
+    padding: "9px 0",
+    borderRadius: 8,
+    border: `1px solid ${BORDER}`,
+    background: "none",
+    fontSize: 13,
+    fontWeight: 500,
+    color: MUTED,
+  },
+  customAddBtn: {
+    flex: 2,
+    padding: "9px 0",
+    borderRadius: 8,
+    border: "none",
+    background: INK,
+    color: PAPER,
+    fontSize: 13,
+    fontWeight: 600,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  cartPane: { position: "sticky", top: 20 },
+  cartCard: {
+    background: "#FFFFFF",
+    border: `1px solid ${BORDER}`,
+    borderRadius: "10px 10px 0 0",
+    padding: "18px 18px 0 18px",
+    position: "relative",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+  },
+  cartHeader: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 12,
+    fontWeight: 600,
+    letterSpacing: "0.06em",
+    textTransform: "uppercase",
+    marginBottom: 12,
+  },
+  cartItems: { minHeight: 40, maxHeight: 260, overflowY: "auto", marginBottom: 4 },
+  emptyCart: { fontSize: 13, color: MUTED, padding: "12px 0" },
+  cartRow: { display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderBottom: `1px solid ${BORDER}` },
+  cartItemName: { fontSize: 13.5, fontWeight: 500 },
+  cartItemUnit: { fontSize: 11.5, color: MUTED, marginTop: 1 },
+  rateEditRowSmall: { display: "flex", alignItems: "center", gap: 4, marginTop: 2, flexWrap: "wrap" },
+  priceEditRow: { display: "flex", alignItems: "center", gap: 3, marginTop: 2 },
+  priceEditDollar: { fontSize: 11.5, color: MUTED, fontFamily: "'IBM Plex Mono', monospace" },
+  priceEditInput: {
+    width: 54, padding: "2px 4px", borderRadius: 5, border: `1px solid ${BORDER}`,
+    fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", background: "#FAFAF7",
+  },
+  priceEditLabel: { fontSize: 11, color: MUTED },
+  priceWasLabel: { fontSize: 10.5, color: "#B0413E", fontStyle: "italic", marginLeft: 2 },
+  qtyGroup: { display: "flex", alignItems: "center", gap: 6 },
+  qtyBtn: {
+    width: 20, height: 20, borderRadius: 5, border: `1px solid ${INK}`, background: "none",
+    display: "flex", alignItems: "center", justifyContent: "center", transition: "background 0.12s, color 0.12s",
+  },
+  qtyNum: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, minWidth: 14, textAlign: "center" },
+  cartItemTotal: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, minWidth: 52, textAlign: "right" },
+  removeBtn: { background: "none", border: "none", color: MUTED, padding: 2 },
+  totalsBlock: { padding: "10px 0" },
+  rowLine: { display: "flex", justifyContent: "space-between", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, padding: "3px 0" },
+  totalRow: {
+    display: "flex", justifyContent: "space-between", fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 17, fontWeight: 600, paddingTop: 8, marginTop: 4, borderTop: `1px dashed ${BORDER}`,
+  },
+  payBlock: { paddingBottom: 16 },
+  creditBox: {
+    background: "#EEE6F5",
+    border: "1px solid #D9C7EC",
+    borderRadius: 8,
+    padding: "10px 12px",
+    marginBottom: 12,
+  },
+  creditBoxHeading: { fontSize: 12, fontWeight: 600, color: "#5B3E7A", marginBottom: 6 },
+  creditApplyRow: { display: "flex", alignItems: "center", gap: 6 },
+  creditMaxBtn: {
+    background: "#5B3E7A", color: "#FFFFFF", border: "none", borderRadius: 6,
+    padding: "5px 9px", fontSize: 11.5, fontWeight: 600,
+  },
+  creditClearBtn: {
+    background: "none", border: "1px solid #C6ADE0", color: "#5B3E7A", borderRadius: 6,
+    padding: "5px 9px", fontSize: 11.5, fontWeight: 600,
+  },
+  creditCoveredNote: {
+    fontSize: 12.5, color: TEAL, fontWeight: 500, marginBottom: 10,
+  },
+  fundsWarning: {
+    fontSize: 12, color: "#B0413E", fontWeight: 500, marginTop: 8,
+  },
+  payButtons: { display: "flex", gap: 8, marginTop: 4, marginBottom: 10 },
+  payBtn: { flex: 1, padding: "9px 0", borderRadius: 8, border: `1px solid ${BORDER}`, background: "#FFFFFF", fontSize: 13, fontWeight: 500 },
+  payBtnActive: { borderColor: INK, background: INK, color: PAPER },
+  cashRow: { marginBottom: 10 },
+  cashInput: {
+    width: "100%", padding: "9px 10px", borderRadius: 8, border: `1px solid ${BORDER}`,
+    fontSize: 13, fontFamily: "'IBM Plex Mono', monospace", marginBottom: 6,
+  },
+  changeText: { fontSize: 12.5, color: TEAL, fontWeight: 500 },
+  noteBlock: { marginBottom: 12 },
+  noteLabel: { fontSize: 11.5, color: MUTED, fontWeight: 600, marginBottom: 4, display: "block" },
+  noteInput: {
+    width: "100%",
+    padding: "8px 10px",
+    borderRadius: 8,
+    border: `1px solid ${BORDER}`,
+    fontSize: 13,
+    fontFamily: "'Inter', sans-serif",
+    resize: "vertical",
+    minHeight: 44,
+    background: "#FFFFFF",
+  },
+  completeBtn: {
+    width: "100%", padding: "12px 0", borderRadius: 8, border: "none", color: "#FFFFFF",
+    fontSize: 14, fontWeight: 600, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, transition: "filter 0.12s",
+  },
+  clearBtn: { width: "100%", marginTop: 8, padding: "8px 0", borderRadius: 8, border: "none", background: "none", color: MUTED, fontSize: 12.5 },
+  perforation: { display: "flex", justifyContent: "space-between", padding: "0 2px", transform: "translateY(6px)" },
+  notch: { width: 10, height: 10, borderRadius: "50%", background: PAPER, marginTop: -5 },
+  historyWrap: { paddingTop: 4 },
+  totalsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))",
+    gap: 1,
+    background: BORDER,
+    border: `1px solid ${BORDER}`,
+    borderRadius: 10,
+    overflow: "hidden",
+    marginBottom: 18,
+  },
+  totalStat: { background: "#FFFFFF", padding: "14px 16px" },
+  totalStatLabel: {
+    fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 5, fontWeight: 600,
+  },
+  totalStatValue: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 600 },
+  historyMargin: { fontSize: 11.5, fontWeight: 500, marginTop: 3, fontFamily: "'IBM Plex Mono', monospace" },
+  historyCreditNote: { fontSize: 11.5, fontWeight: 500, marginTop: 2, color: "#5B3E7A", fontFamily: "'IBM Plex Mono', monospace" },
+  historyNote: { fontSize: 12, color: MUTED, fontStyle: "italic", marginTop: 4 },
+  historyList: { display: "flex", flexDirection: "column", gap: 1 },
+  valueNetRow: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    background: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: 10,
+    padding: "14px 16px", marginBottom: 20,
+  },
+  valueNetLabel: { fontSize: 12.5, color: MUTED, maxWidth: 320 },
+  valueNetAmount: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 19, fontWeight: 700 },
+  settingsHeading2: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: "0.05em", color: MUTED, marginBottom: 10,
+  },
+  catValueTable: {
+    background: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: 10, overflow: "hidden",
+  },
+  catValueHead: {
+    display: "flex", gap: 8, fontSize: 11, color: MUTED, textTransform: "uppercase",
+    letterSpacing: "0.04em", fontWeight: 600, padding: "10px 14px", borderBottom: `1px solid ${BORDER}`,
+  },
+  catValueRow: {
+    display: "flex", gap: 8, alignItems: "center", fontSize: 13, padding: "10px 14px",
+    borderBottom: `1px solid ${BORDER}`,
+  },
+  historyRow: {
+    display: "flex", justifyContent: "space-between", alignItems: "center", background: "#FFFFFF",
+    border: `1px solid ${BORDER}`, borderRadius: 8, padding: "12px 14px", marginBottom: 8, gap: 12,
+  },
+  historyTime: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: MUTED, marginBottom: 3 },
+  historyItems: { fontSize: 13, maxWidth: 480 },
+  historyPriceAdjusted: { fontSize: 11.5, color: "#B0413E", fontStyle: "italic" },
+  historyMeta: { display: "flex", alignItems: "center", gap: 10, flexShrink: 0 },
+  historyMethod: { fontSize: 11, textTransform: "uppercase", padding: "3px 8px", borderRadius: 4, fontWeight: 600 },
+  historyTotal: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 14, fontWeight: 600, minWidth: 60, textAlign: "right" },
+  overlay: {
+    position: "fixed", inset: 0, background: "rgba(35,38,43,0.5)", display: "flex",
+    alignItems: "center", justifyContent: "center", zIndex: 50, padding: 20,
+  },
+  receiptCard: {
+    background: "#FFFFFF", borderRadius: 12, padding: "26px 24px 20px", width: 340,
+    maxWidth: "100%", position: "relative", boxShadow: "0 12px 32px rgba(0,0,0,0.18)",
+  },
+  closeBtn: { position: "absolute", top: 14, right: 14, background: "none", border: "none", color: MUTED },
+  receiptTitle: { fontSize: 17, fontWeight: 600 },
+  receiptSub: { fontSize: 12.5, color: MUTED, marginBottom: 14 },
+  receiptNote: {
+    fontSize: 12.5, color: INK, fontStyle: "italic", background: "#F5F6F3",
+    borderRadius: 7, padding: "8px 10px", marginBottom: 14,
+  },
+  receiptItems: { borderTop: `1px dashed ${BORDER}`, borderBottom: `1px dashed ${BORDER}`, padding: "10px 0", marginBottom: 4 },
+  receiptLine: { display: "flex", justifyContent: "space-between", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, padding: "3px 0" },
+  receiptAdjustedNote: { fontSize: 10.5, color: "#B0413E", fontStyle: "italic" },
+  newSaleBtn: { width: "100%", padding: "11px 0", borderRadius: 8, border: "none", color: "#FFFFFF", fontSize: 13.5, fontWeight: 600, marginTop: 10 },
+
+  settingsWrap: { display: "flex", flexDirection: "column", gap: 24, paddingTop: 4 },
+  settingsSection: {
+    background: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: 10, padding: 18,
+  },
+  settingsHeading: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 12.5, fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: "0.05em", color: MUTED, marginBottom: 12,
+  },
+  catEditList: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 },
+  catEditRow: { display: "flex", alignItems: "center", gap: 8 },
+  catEditInput: {
+    flex: 1, padding: "7px 10px", borderRadius: 7, border: `1px solid ${BORDER}`, fontSize: 13.5, fontFamily: "'Inter', sans-serif",
+  },
+  iconBtn: {
+    background: "none", border: `1px solid ${BORDER}`, borderRadius: 7, padding: "6px 8px",
+    display: "flex", alignItems: "center", justifyContent: "center", transition: "background 0.12s",
+  },
+  addRow: { display: "flex", gap: 8 },
+  addInput: {
+    flex: 1, padding: "8px 10px", borderRadius: 7, border: `1px solid ${BORDER}`, fontSize: 13.5, fontFamily: "'Inter', sans-serif",
+  },
+  addBtn: {
+    display: "flex", alignItems: "center", gap: 5, background: INK, color: PAPER, border: "none",
+    borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
+  },
+  productTable: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 },
+  productTableHead: {
+    display: "flex", gap: 8, fontSize: 11, color: MUTED, textTransform: "uppercase",
+    letterSpacing: "0.04em", padding: "0 2px", fontWeight: 600,
+  },
+  productTableRow: { display: "flex", gap: 8, alignItems: "center" },
+  linkCell: { display: "flex", alignItems: "center", gap: 4 },
+  marginTag: {
+    width: 70, fontSize: 12.5, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600,
+    display: "flex", alignItems: "baseline", gap: 3, flexShrink: 0,
+  },
+  marginPct: { fontSize: 10.5, fontWeight: 500, color: MUTED },
+  tableInput: {
+    padding: "7px 9px", borderRadius: 7, border: `1px solid ${BORDER}`, fontSize: 13,
+    fontFamily: "'Inter', sans-serif", background: "#FFFFFF", minWidth: 0,
+  },
+  addProductRow: {
+    display: "flex", gap: 8, alignItems: "center", paddingTop: 12, borderTop: `1px dashed ${BORDER}`,
+  },
+  loadingWrap: {
+    display: "flex", alignItems: "center", justifyContent: "center", minHeight: 300,
+    fontSize: 13.5, color: MUTED, fontFamily: "'IBM Plex Mono', monospace",
+  },
+  saveErrorBanner: {
+    background: "#FBEAEA", color: "#8A2E2A", border: "1px solid #EFC7C5", borderRadius: 8,
+    padding: "8px 12px", fontSize: 12.5, marginBottom: 14,
+  },
+  dataNote: { fontSize: 12.5, color: MUTED, marginBottom: 12 },
+  resetBtn: {
+    background: "none", border: `1px solid #D9A0A0`, color: "#B0413E", borderRadius: 7,
+    padding: "8px 14px", fontSize: 13, fontWeight: 600,
+  },
+  resetConfirmRow: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  resetConfirmText: { fontSize: 12.5, color: "#8A2E2A" },
+  resetConfirmBtn: {
+    background: "#B0413E", color: "#FFFFFF", border: "none", borderRadius: 7,
+    padding: "7px 12px", fontSize: 12.5, fontWeight: 600,
+  },
+  resetCancelBtn: {
+    background: "none", border: `1px solid ${BORDER}`, borderRadius: 7,
+    padding: "7px 12px", fontSize: 12.5, fontWeight: 500, color: INK,
+  },
+};
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<AppRoot />);
+</script>
+</body>
+</html>
