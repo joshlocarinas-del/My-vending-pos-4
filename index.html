@@ -328,7 +328,9 @@ const DEFAULT_PRODUCTS = [
 ];
 
 const fmt = (n) => `$${n.toFixed(2)}`;
-let nextId = 100;
+function newProductId() {
+  return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+}
 
 const MODES = {
   sell: { label: "Sell", verb: "Add to sale", icon: ShoppingBag, color: "#235349", bg: "#E4EFEC" },
@@ -467,10 +469,6 @@ function POS() {
   function addToCart(product) {
     setCart((prev) => {
       const existing = prev.find((i) => i.id === product.id);
-      const currentQty = existing ? existing.qty : 0;
-      if (mode === "sell" && typeof product.stock === "number" && currentQty >= product.stock) {
-        return prev; // out of stock, don't add more
-      }
       if (existing) {
         return prev.map((i) => (i.id === product.id ? { ...i, qty: i.qty + 1 } : i));
       }
@@ -481,17 +479,7 @@ function POS() {
   function changeQty(id, delta) {
     setCart((prev) =>
       prev
-        .map((i) => {
-          if (i.id !== id) return i;
-          let newQty = i.qty + delta;
-          if (mode === "sell") {
-            const liveProduct = products.find((p) => p.id === id);
-            if (liveProduct && typeof liveProduct.stock === "number") {
-              newQty = Math.min(newQty, liveProduct.stock);
-            }
-          }
-          return { ...i, qty: newQty };
-        })
+        .map((i) => (i.id === id ? { ...i, qty: i.qty + delta } : i))
         .filter((i) => i.qty > 0)
     );
   }
@@ -611,9 +599,8 @@ function POS() {
               url: item.url ? item.url : existing.url,
             };
           } else {
-            nextId += 1;
             next.push({
-              id: `p${nextId}`,
+              id: newProductId(),
               name: item.name,
               value: item.value,
               cost: paidEach,
@@ -834,21 +821,19 @@ function POS() {
                   )}
                   <div style={styles.grid}>
                     {visibleProducts.map((p) => {
-                      const inStock = typeof p.stock !== "number" || p.stock > 0;
                       const inCartQty = cart.find((i) => i.id === p.id)?.qty || 0;
                       const remaining = typeof p.stock === "number" ? p.stock - inCartQty : null;
-                      const atLimit = remaining !== null && remaining <= 0;
-                      const disabled = !inStock || atLimit;
+                      const isLow = remaining !== null && remaining <= 0;
                       return (
                         <div
                           key={p.id}
                           className="prod-btn"
                           role="button"
-                          tabIndex={disabled ? -1 : 0}
-                          style={{ ...styles.prodBtn, ...(disabled ? styles.prodBtnDisabled : {}) }}
-                          onClick={() => !disabled && addToCart(p)}
+                          tabIndex={0}
+                          style={styles.prodBtn}
+                          onClick={() => addToCart(p)}
                           onKeyDown={(e) => {
-                            if (!disabled && (e.key === "Enter" || e.key === " ")) addToCart(p);
+                            if (e.key === "Enter" || e.key === " ") addToCart(p);
                           }}
                         >
                           {p.url && (
@@ -867,11 +852,11 @@ function POS() {
                           <div style={styles.prodName}>{p.name}</div>
                           <div style={styles.prodPrice}>{fmt(p.value)}</div>
                           {typeof p.stock === "number" && (
-                            <div style={{ ...styles.stockLabel, color: atLimit ? "#B0413E" : MUTED }}>
-                              {p.stock === 0
-                                ? "Out of stock"
-                                : atLimit
-                                ? "All in cart"
+                            <div style={{ ...styles.stockLabel, color: isLow ? "#B0413E" : MUTED }}>
+                              {remaining < 0
+                                ? `${Math.abs(remaining)} over stock`
+                                : remaining === 0
+                                ? "0 left"
                                 : `${remaining} in stock`}
                             </div>
                           )}
@@ -1862,11 +1847,10 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
     const cost = draft.cost === "" ? 0 : parseFloat(draft.cost);
     const stock = draft.stock === "" ? 0 : parseInt(draft.stock);
     if (!name || isNaN(value) || value < 0 || !draft.cat) return;
-    nextId += 1;
     setProducts((prev) => [
       ...prev,
       {
-        id: `p${nextId}`,
+        id: newProductId(),
         name,
         value,
         cost: isNaN(cost) ? 0 : cost,
@@ -2117,10 +2101,7 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
                 ...prev,
                 ...DEFAULT_PRODUCTS.filter(
                   (dp) => !prev.some((p) => p.name === dp.name && p.cat === dp.cat)
-                ).map((dp) => {
-                  nextId += 1;
-                  return { ...dp, id: `p${nextId}` };
-                }),
+                ).map((dp) => ({ ...dp, id: newProductId() })),
               ])
             }
           >
