@@ -352,6 +352,7 @@ function POS() {
   const [history, setHistory] = useState([]);
   const [creditBalance, setCreditBalance] = useState(0);
   const [creditCashoutRatePct, setCreditCashoutRatePct] = useState(80);
+  const [creditCashbackOverride, setCreditCashbackOverride] = useState("");
   const [cashOutAmount, setCashOutAmount] = useState(0);
   const [note, setNote] = useState("");
   const [funds, setFunds] = useState(0);
@@ -447,7 +448,13 @@ function POS() {
   // sale total first, and whatever's left over is cashed back to the customer (at a margin).
   const creditUsed = mode === "sell" ? Math.min(creditBalance, sellTotal) : 0;
   const leftoverCredit = mode === "sell" ? Math.max(0, creditBalance - sellTotal) : 0;
-  const creditCashback = leftoverCredit * (creditCashoutRatePct / 100);
+  const creditCashbackAuto = leftoverCredit * (creditCashoutRatePct / 100);
+  const creditCashbackOverrideNum =
+    creditCashbackOverride !== "" ? parseFloat(creditCashbackOverride) : null;
+  const hasCashbackOverride = creditCashbackOverrideNum !== null && !isNaN(creditCashbackOverrideNum);
+  const creditCashback = hasCashbackOverride
+    ? Math.max(0, Math.min(leftoverCredit, creditCashbackOverrideNum))
+    : creditCashbackAuto;
   const dueAfterCredit = mode === "sell" ? Math.max(0, sellTotal - creditUsed) : total;
 
   const cashNum = parseFloat(cashGiven) || 0;
@@ -506,6 +513,7 @@ function POS() {
     setPayMethod(null);
     setCashGiven("");
     setCashOutAmount(0);
+    setCreditCashbackOverride("");
     setNote("");
   }
 
@@ -514,6 +522,7 @@ function POS() {
     setPayMethod(null);
     setCashGiven("");
     setCashOutAmount(0);
+    setCreditCashbackOverride("");
     setNote("");
   }
 
@@ -548,7 +557,10 @@ function POS() {
       creditApplied: mode === "sell" ? creditUsed : 0,
       leftoverCredit: mode === "sell" ? leftoverCredit : 0,
       creditCashback: mode === "sell" ? creditCashback : 0,
-      creditCashoutRatePct: mode === "sell" && leftoverCredit > 0 ? creditCashoutRatePct : null,
+      creditCashoutRatePct:
+        mode === "sell" && leftoverCredit > 0
+          ? Math.round((creditCashback / leftoverCredit) * 100)
+          : null,
       cashOut: mode === "trade" ? cashOutCapped : 0,
       creditIssued: mode === "trade" ? creditPortion : mode === "sell" ? null : total,
       costTotal,
@@ -1016,13 +1028,14 @@ function POS() {
                     {leftoverCredit > 0 && (
                       <>
                         <Row label="Remaining after sale" value={fmt(leftoverCredit)} />
-                        <div style={styles.cashbackRateRow}>
+                        <div style={{ ...styles.cashbackRateRow, opacity: hasCashbackOverride ? 0.4 : 1 }}>
                           <span style={styles.rateLabel}>Pay leftover as cash at</span>
                           <input
                             type="number"
                             min="0"
                             max="100"
                             value={creditCashoutRatePct}
+                            disabled={hasCashbackOverride}
                             onChange={(e) => {
                               const v = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
                               setCreditCashoutRatePct(v);
@@ -1030,6 +1043,25 @@ function POS() {
                             style={styles.rateInput}
                           />
                           <span style={styles.rateLabel}>% of the difference</span>
+                        </div>
+                        <div style={styles.cashbackRateRow}>
+                          <span style={styles.rateLabel}>Or pay an exact amount</span>
+                          <span style={styles.priceEditDollar}>$</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max={leftoverCredit}
+                            step="0.01"
+                            placeholder={creditCashbackAuto.toFixed(2)}
+                            value={creditCashbackOverride}
+                            onChange={(e) => setCreditCashbackOverride(e.target.value)}
+                            style={styles.priceEditInput}
+                          />
+                          {hasCashbackOverride && (
+                            <button style={styles.creditClearBtn} onClick={() => setCreditCashbackOverride("")}>
+                              Use %
+                            </button>
+                          )}
                         </div>
                         <Row label="Cash back to customer" value={fmt(creditCashback)} />
                         {creditCashback > funds && (
