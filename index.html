@@ -249,9 +249,26 @@ function AppRoot() {
             color: "#7A5210",
             fontFamily: "'Inter', sans-serif",
             fontWeight: 500,
+            flexWrap: "wrap",
+            textAlign: "center",
           }}
         >
-          Test mode — this data stays on this device only and isn't tied to your account.
+          <span>Test mode — this data stays on this device only and isn't tied to your account.</span>
+          <button
+            onClick={() => setGuestMode(false)}
+            style={{
+              background: "none",
+              border: "1px solid #7A5210",
+              borderRadius: 6,
+              padding: "3px 10px",
+              fontSize: 12,
+              fontWeight: 600,
+              color: "#7A5210",
+              cursor: "pointer",
+            }}
+          >
+            Sign in here
+          </button>
         </div>
         <POS key="guest" />
       </div>
