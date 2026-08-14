@@ -1,8 +1,320 @@
-import React, { useState, useMemo, useEffect } from "react";
-import {
-  Plus, Minus, Trash2, Check, X, Receipt, ChevronLeft,
-  ArrowRightLeft, Wallet, ShoppingBag, Settings as SettingsIcon, Pencil, Link as LinkIcon,
-} from "lucide-react";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+<title>Card Vendor POS</title>
+<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgo=" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<style>
+  html, body { margin: 0; padding: 0; background: #F5F6F3; }
+  #root { min-height: 100vh; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div id="root">Loading…</div>
+<script>
+  window.addEventListener("error", function (e) {
+    var root = document.getElementById("root");
+    if (root && root.textContent.indexOf("Loading") !== -1) {
+      root.innerHTML =
+        '<div style="font-family: monospace; padding: 24px; color: #B0413E; white-space: pre-wrap;">' +
+        "Something failed to load:\n\n" +
+        (e.message || "Unknown error") +
+        (e.filename ? "\n\nFile: " + e.filename + ":" + e.lineno : "") +
+        "\n\nTry refreshing the page. If it keeps happening, check your internet connection (this app loads React from a CDN and needs it to load fully)." +
+        "</div>";
+    }
+  });
+</script>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect } = React;
+
+/* ---------- Simple text-glyph icon shims (replaces lucide-react for standalone use) ---------- */
+function makeIcon(glyph, extraStyle) {
+  return function Icon({ size = 14, color = "currentColor", style }) {
+    return (
+      <span
+        style={{
+          fontSize: size,
+          color,
+          lineHeight: 1,
+          display: "inline-block",
+          fontFamily: "system-ui, sans-serif",
+          fontWeight: 600,
+          ...extraStyle,
+          ...style,
+        }}
+      >
+        {glyph}
+      </span>
+    );
+  };
+}
+const Plus = makeIcon("+");
+const Minus = makeIcon("\u2212");
+const Trash2 = makeIcon("\uD83D\uDDD1");
+const Check = makeIcon("\u2713");
+const X = makeIcon("\u2715");
+const Receipt = makeIcon("\uD83E\uDDFE");
+const ChevronLeft = makeIcon("\u2039");
+const ArrowRightLeft = makeIcon("\u21C4");
+const Wallet = makeIcon("\uD83D\uDCB0");
+const ShoppingBag = makeIcon("\uD83D\uDECD");
+const SettingsIcon = makeIcon("\u2699");
+const Pencil = makeIcon("\u270E");
+const LinkIcon = makeIcon("\uD83D\uDD17");
+
+/* ---------- Firebase (Google sign-in + per-user cloud storage) ---------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyAlbTncs-FQB97S46bsUOZBSeu5jHkhJfQ",
+  authDomain: "vendor-pos-ce47b.firebaseapp.com",
+  projectId: "vendor-pos-ce47b",
+  storageBucket: "vendor-pos-ce47b.firebasestorage.app",
+  messagingSenderId: "311568022445",
+  appId: "1:311568022445:web:0714f2a3f5115f2e12ff24",
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+/* Builds a window.storage-compatible object backed by one Firestore doc per signed-in user */
+function makeFirestoreStorage(uid) {
+  const docRef = db.collection("posData").doc(uid);
+  return {
+    get: async (key) => {
+      const snap = await docRef.get();
+      const data = snap.exists ? snap.data() : {};
+      if (!(key in data)) throw new Error("not found");
+      return { key, value: data[key], shared: false };
+    },
+    set: async (key, value) => {
+      await docRef.set({ [key]: value }, { merge: true });
+      return { key, value, shared: false };
+    },
+    delete: async (key) => {
+      await docRef.update({ [key]: firebase.firestore.FieldValue.delete() });
+      return { key, deleted: true, shared: false };
+    },
+    list: async (prefix) => {
+      const snap = await docRef.get();
+      const data = snap.exists ? snap.data() : {};
+      const keys = Object.keys(data).filter((k) => !prefix || k.startsWith(prefix));
+      return { keys };
+    },
+  };
+}
+
+/* Builds a window.storage-compatible object backed by browser localStorage (used for test mode, no account needed) */
+function makeLocalStorage() {
+  return {
+    get: async (key) => {
+      const raw = localStorage.getItem("test-" + key);
+      if (raw === null) throw new Error("not found");
+      return { key, value: raw, shared: false };
+    },
+    set: async (key, value) => {
+      localStorage.setItem("test-" + key, value);
+      return { key, value, shared: false };
+    },
+    delete: async (key) => {
+      localStorage.removeItem("test-" + key);
+      return { key, deleted: true, shared: false };
+    },
+    list: async (prefix) => {
+      const keys = Object.keys(localStorage)
+        .filter((k) => k.startsWith("test-"))
+        .map((k) => k.slice(5))
+        .filter((k) => !prefix || k.startsWith(prefix));
+      return { keys };
+    },
+  };
+}
+
+function SignInScreen({ onSignIn, onSkip, error }) {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#F5F6F3",
+        fontFamily: "'Inter', sans-serif",
+        padding: 20,
+      }}
+    >
+      <div
+        style={{
+          background: "#FFFFFF",
+          border: "1px solid #DAD8D0",
+          borderRadius: 12,
+          padding: "36px 32px",
+          maxWidth: 360,
+          width: "100%",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, fontSize: 18, marginBottom: 8 }}>
+          CARD VENDOR POS
+        </div>
+        <div style={{ fontSize: 13, color: "#6B6E68", marginBottom: 24, lineHeight: 1.5 }}>
+          Sign in with your Google account to load your data, or start syncing across devices.
+        </div>
+        <button
+          onClick={onSignIn}
+          style={{
+            width: "100%",
+            padding: "12px 0",
+            borderRadius: 8,
+            border: "1px solid #DAD8D0",
+            background: "#FFFFFF",
+            fontSize: 14,
+            fontWeight: 600,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          Sign in with Google
+        </button>
+        {error && (
+          <div style={{ color: "#B0413E", fontSize: 12.5, marginTop: 14 }}>{error}</div>
+        )}
+        <button
+          onClick={onSkip}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#6B6E68",
+            fontSize: 12,
+            marginTop: 18,
+            cursor: "pointer",
+            textDecoration: "underline",
+          }}
+        >
+          Skip sign-in (test mode — nothing gets saved to your account)
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AppRoot() {
+  const [user, setUser] = useState(undefined); // undefined = checking, null = signed out
+  const [guestMode, setGuestMode] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((u) => {
+      if (u) window.storage = makeFirestoreStorage(u.uid);
+      setUser(u);
+    });
+    return unsub;
+  }, []);
+
+  function handleSignIn() {
+    setError("");
+    const provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider).catch((err) => setError(err.message));
+  }
+
+  function handleSkip() {
+    window.storage = makeLocalStorage();
+    setGuestMode(true);
+  }
+
+  if (guestMode) {
+    return (
+      <div>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: 10,
+            padding: "8px 20px",
+            background: "#FBEED2",
+            fontSize: 12.5,
+            color: "#7A5210",
+            fontFamily: "'Inter', sans-serif",
+            fontWeight: 500,
+            flexWrap: "wrap",
+            textAlign: "center",
+          }}
+        >
+          <span>Test mode — this data stays on this device only and isn't tied to your account.</span>
+          <button
+            onClick={() => setGuestMode(false)}
+            style={{
+              background: "none",
+              border: "1px solid #7A5210",
+              borderRadius: 6,
+              padding: "3px 10px",
+              fontSize: 12,
+              fontWeight: 600,
+              color: "#7A5210",
+              cursor: "pointer",
+            }}
+          >
+            Sign in here
+          </button>
+        </div>
+        <POS key="guest" />
+      </div>
+    );
+  }
+
+  if (user === undefined) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'IBM Plex Mono', monospace", color: "#6B6E68" }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <SignInScreen onSignIn={handleSignIn} onSkip={handleSkip} error={error} />;
+  }
+
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "flex-end",
+          alignItems: "center",
+          gap: 10,
+          padding: "10px 20px 0",
+          maxWidth: 980,
+          margin: "0 auto",
+          fontSize: 12.5,
+          color: "#6B6E68",
+          fontFamily: "'Inter', sans-serif",
+        }}
+      >
+        <span>Signed in as {user.email}</span>
+        <button
+          onClick={() => auth.signOut()}
+          style={{ background: "none", border: "1px solid #DAD8D0", borderRadius: 6, padding: "4px 10px", fontSize: 12, cursor: "pointer" }}
+        >
+          Sign out
+        </button>
+      </div>
+      <POS key={user.uid} />
+    </div>
+  );
+}
 
 const DEFAULT_CATEGORIES = ["Singles", "Sealed Product", "Graded", "Bulk/Lots"];
 
@@ -24,7 +336,7 @@ const MODES = {
   trade: { label: "Trade", verb: "Add to trade", icon: ArrowRightLeft, color: "#5B3E7A", bg: "#EEE6F5" },
 };
 
-export default function POS() {
+function POS() {
   const [view, setView] = useState("register"); // 'register' | 'history' | 'settings'
   const [mode, setMode] = useState("sell");
   const [category, setCategory] = useState("All");
@@ -927,6 +1239,7 @@ function FundsTracker({ funds, setFunds, pendingSpend }) {
   );
 }
 
+
 function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
   const [open, setOpen] = useState(!!forceOpen);
   const [cat, setCat] = useState(categories[0] || "");
@@ -1222,7 +1535,6 @@ function HistoryView({ history, setHistory }) {
                           {sale.mode === "sell" && sale.creditApplied > 0 && (
                             <div style={styles.historyCreditNote}>
                               {fmt(sale.creditApplied)} paid with store credit
-                              {sale.creditCashback > 0 && ` · ${fmt(sale.creditCashback)} cash back (${sale.creditCashoutRatePct}%)`}
                             </div>
                           )}
 
@@ -1436,12 +1748,6 @@ function ReceiptModal({ sale, onClose }) {
           {sale.mode === "sell" && sale.creditApplied > 0 && (
             <Row label="Store credit applied" value={`− ${fmt(sale.creditApplied)}`} />
           )}
-          {sale.mode === "sell" && sale.creditCashback > 0 && (
-            <Row
-              label={`Cash back (${sale.creditCashoutRatePct}% of leftover credit)`}
-              value={fmt(sale.creditCashback)}
-            />
-          )}
           {sale.mode === "trade" && sale.cashOut > 0 && (
             <>
               <Row label="Paid as cash" value={fmt(sale.cashOut)} />
@@ -1470,6 +1776,24 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
   const [newCat, setNewCat] = useState("");
   const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "" });
   const [confirmingReset, setConfirmingReset] = useState(false);
+
+  const hasExamples = products.some((p) => p.name.includes("(example)"));
+
+  function removeExamples() {
+    setProducts((prev) => prev.filter((p) => !p.name.includes("(example)")));
+  }
+
+  function addExamplesBack() {
+    setCategories((prevCats) => {
+      const missing = DEFAULT_CATEGORIES.filter((c) => !prevCats.includes(c));
+      return missing.length ? [...prevCats, ...missing] : prevCats;
+    });
+    setProducts((prev) => {
+      const existingIds = new Set(prev.map((p) => p.id));
+      const toAdd = DEFAULT_PRODUCTS.filter((dp) => !existingIds.has(dp.id));
+      return [...prev, ...toAdd];
+    });
+  }
 
   function renameCategory(oldName, newName) {
     const clean = newName.trim();
@@ -1718,6 +2042,24 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
           />
           <button style={styles.addBtn} onClick={addProduct}>
             <Plus size={14} /> Add
+          </button>
+        </div>
+      </div>
+
+      <div style={styles.settingsSection}>
+        <div style={styles.settingsHeading}>Example data</div>
+        <div style={styles.dataNote}>
+          The catalog ships with a few sample products marked "(example)" so you can see how everything works.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            style={{ ...styles.resetBtn, opacity: hasExamples ? 1 : 0.4, pointerEvents: hasExamples ? "auto" : "none" }}
+            onClick={removeExamples}
+          >
+            Remove all examples
+          </button>
+          <button style={styles.addExamplesBtn} onClick={addExamplesBack}>
+            Add examples back
           </button>
         </div>
       </div>
@@ -2358,3 +2700,9 @@ const styles = {
     padding: "7px 12px", fontSize: 12.5, fontWeight: 500, color: INK,
   },
 };
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<AppRoot />);
+</script>
+</body>
+</html>
