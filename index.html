@@ -332,6 +332,25 @@ function newProductId() {
   return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
 
+// Older versions of this app could accidentally assign the same id to two different
+// products across sessions. This repairs any such collisions by giving every duplicate
+// past the first one a fresh, guaranteed-unique id.
+function dedupeProductIds(products) {
+  const seen = new Set();
+  let changed = false;
+  const fixed = products.map((p) => {
+    if (!seen.has(p.id)) {
+      seen.add(p.id);
+      return p;
+    }
+    changed = true;
+    const newId = newProductId();
+    seen.add(newId);
+    return { ...p, id: newId };
+  });
+  return changed ? fixed : products;
+}
+
 const MODES = {
   sell: { label: "Sell", verb: "Add to sale", icon: ShoppingBag, color: "#235349", bg: "#E4EFEC" },
   buy: { label: "Buy", verb: "Add to buy", icon: Wallet, color: "#7A5210", bg: "#FBEED2" },
@@ -369,7 +388,7 @@ function POS() {
         if (configRes && configRes.value) {
           const cfg = JSON.parse(configRes.value);
           if (cfg.categories) setCategories(cfg.categories);
-          if (cfg.products) setProducts(cfg.products);
+          if (cfg.products) setProducts(dedupeProductIds(cfg.products));
           if (typeof cfg.buyRatePct === "number") setBuyRatePct(cfg.buyRatePct);
           if (typeof cfg.tradeRatePct === "number") setTradeRatePct(cfg.tradeRatePct);
           if (typeof cfg.creditBalance === "number") setCreditBalance(cfg.creditBalance);
@@ -447,16 +466,13 @@ function POS() {
   const cashOutCapped = mode === "trade" ? Math.max(0, Math.min(cashOutAmount, total)) : 0;
   const creditPortion = mode === "trade" ? total - cashOutCapped : total;
   // Any existing store credit is forced fully redeemed on the next sale: applied against the
-  // sale total first, and whatever's left over is cashed back to the customer (at a margin).
+  // sale total first, and whatever's left over is cashed back to the customer. The cashback
+  // amount defaults to the full leftover but can be typed in directly to adjust it.
   const creditUsed = mode === "sell" ? Math.min(creditBalance, sellTotal) : 0;
   const leftoverCredit = mode === "sell" ? Math.max(0, creditBalance - sellTotal) : 0;
-  const creditCashbackAuto = leftoverCredit * (creditCashoutRatePct / 100);
-  const creditCashbackOverrideNum =
-    creditCashbackOverride !== "" ? parseFloat(creditCashbackOverride) : null;
-  const hasCashbackOverride = creditCashbackOverrideNum !== null && !isNaN(creditCashbackOverrideNum);
-  const creditCashback = hasCashbackOverride
-    ? Math.max(0, Math.min(leftoverCredit, creditCashbackOverrideNum))
-    : creditCashbackAuto;
+  const creditCashbackNum =
+    creditCashbackOverride !== "" ? parseFloat(creditCashbackOverride) : leftoverCredit;
+  const creditCashback = Math.max(0, Math.min(leftoverCredit, isNaN(creditCashbackNum) ? 0 : creditCashbackNum));
   const dueAfterCredit = mode === "sell" ? Math.max(0, sellTotal - creditUsed) : total;
 
   const cashNum = parseFloat(cashGiven) || 0;
@@ -720,6 +736,8 @@ function POS() {
           setProducts={setProducts}
           history={history}
           setHistory={setHistory}
+          creditBalance={creditBalance}
+          setCreditBalance={setCreditBalance}
         />
       )}
 
@@ -1013,42 +1031,24 @@ function POS() {
                     {leftoverCredit > 0 && (
                       <>
                         <Row label="Remaining after sale" value={fmt(leftoverCredit)} />
-                        <div style={{ ...styles.cashbackRateRow, opacity: hasCashbackOverride ? 0.4 : 1 }}>
-                          <span style={styles.rateLabel}>Pay leftover as cash at</span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={creditCashoutRatePct}
-                            disabled={hasCashbackOverride}
-                            onChange={(e) => {
-                              const v = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
-                              setCreditCashoutRatePct(v);
-                            }}
-                            style={styles.rateInput}
-                          />
-                          <span style={styles.rateLabel}>% of the difference</span>
-                        </div>
                         <div style={styles.cashbackRateRow}>
-                          <span style={styles.rateLabel}>Or pay an exact amount</span>
+                          <span style={styles.rateLabel}>Cash back to customer</span>
                           <span style={styles.priceEditDollar}>$</span>
                           <input
                             type="number"
                             min="0"
                             max={leftoverCredit}
                             step="0.01"
-                            placeholder={creditCashbackAuto.toFixed(2)}
-                            value={creditCashbackOverride}
+                            value={creditCashbackOverride !== "" ? creditCashbackOverride : leftoverCredit.toFixed(2)}
                             onChange={(e) => setCreditCashbackOverride(e.target.value)}
                             style={styles.priceEditInput}
                           />
-                          {hasCashbackOverride && (
+                          {creditCashbackOverride !== "" && (
                             <button style={styles.creditClearBtn} onClick={() => setCreditCashbackOverride("")}>
-                              Use %
+                              Reset to full amount
                             </button>
                           )}
                         </div>
-                        <Row label="Cash back to customer" value={fmt(creditCashback)} />
                         {creditCashback > funds && (
                           <div style={styles.fundsWarning}>
                             That's {fmt(creditCashback - funds)} more than you have in available funds.
@@ -1789,27 +1789,46 @@ function ReceiptModal({ sale, onClose }) {
   );
 }
 
-function SettingsView({ categories, setCategories, products, setProducts, history, setHistory }) {
+function SettingsView({ categories, setCategories, products, setProducts, history, setHistory, creditBalance, setCreditBalance }) {
   const [newCat, setNewCat] = useState("");
   const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "" });
   const [confirmingReset, setConfirmingReset] = useState(false);
+  const [confirmingCreditClear, setConfirmingCreditClear] = useState(false);
+  const [creditAdjustAmount, setCreditAdjustAmount] = useState("");
+  const [adjustingCredit, setAdjustingCredit] = useState(false);
+  const [dupeFixResult, setDupeFixResult] = useState(null);
 
-  const hasExamples = products.some((p) => p.name.includes("(example)"));
-
-  function removeExamples() {
-    setProducts((prev) => prev.filter((p) => !p.name.includes("(example)")));
+  function applyCreditAdjust() {
+    const v = parseFloat(creditAdjustAmount);
+    if (isNaN(v) || v === 0) return;
+    setCreditBalance((b) => Math.max(0, Math.round((b + v) * 100) / 100));
+    setCreditAdjustAmount("");
+    setAdjustingCredit(false);
   }
 
-  function addExamplesBack() {
-    setCategories((prevCats) => {
-      const missing = DEFAULT_CATEGORIES.filter((c) => !prevCats.includes(c));
-      return missing.length ? [...prevCats, ...missing] : prevCats;
+  const duplicateIdCount = (() => {
+    const seen = new Set();
+    let dupes = 0;
+    products.forEach((p) => {
+      if (seen.has(p.id)) dupes += 1;
+      else seen.add(p.id);
     });
-    setProducts((prev) => {
-      const existingIds = new Set(prev.map((p) => p.id));
-      const toAdd = DEFAULT_PRODUCTS.filter((dp) => !existingIds.has(dp.id));
-      return [...prev, ...toAdd];
+    return dupes;
+  })();
+
+  function fixDuplicateIds() {
+    const seen = new Set();
+    let fixedCount = 0;
+    const fixed = products.map((p) => {
+      if (seen.has(p.id)) {
+        fixedCount += 1;
+        return { ...p, id: newProductId() };
+      }
+      seen.add(p.id);
+      return p;
     });
+    setProducts(fixed);
+    setDupeFixResult(fixedCount);
   }
 
   function renameCategory(oldName, newName) {
@@ -2063,21 +2082,63 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
       </div>
 
       <div style={styles.settingsSection}>
-        <div style={styles.settingsHeading}>Example data</div>
+        <div style={styles.settingsHeading}>Store Credit</div>
         <div style={styles.dataNote}>
-          The catalog ships with a few sample products marked "(example)" so you can see how everything works.
+          Current balance owed to customers: <strong>{fmt(creditBalance)}</strong>. This is automatically
+          applied on a customer's next sale — use this to fix a mistake or manually adjust it.
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button
-            style={{ ...styles.resetBtn, opacity: hasExamples ? 1 : 0.4, pointerEvents: hasExamples ? "auto" : "none" }}
-            onClick={removeExamples}
-          >
-            Remove all examples
+
+        {!adjustingCredit ? (
+          <button style={styles.exampleBtn} onClick={() => setAdjustingCredit(true)}>
+            Add / remove credit
           </button>
-          <button style={styles.addExamplesBtn} onClick={addExamplesBack}>
-            Add examples back
-          </button>
-        </div>
+        ) : (
+          <div style={styles.creditAdjustRow}>
+            <input
+              type="number"
+              step="0.01"
+              placeholder="+50 or -20"
+              value={creditAdjustAmount}
+              onChange={(e) => setCreditAdjustAmount(e.target.value)}
+              style={styles.fundsAddInput}
+              autoFocus
+              onKeyDown={(e) => e.key === "Enter" && applyCreditAdjust()}
+            />
+            <button style={styles.fundsAddConfirm} onClick={applyCreditAdjust}>Save</button>
+            <button
+              style={styles.fundsAddCancel}
+              onClick={() => { setAdjustingCredit(false); setCreditAdjustAmount(""); }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {creditBalance > 0 && (
+          !confirmingCreditClear ? (
+            <button
+              style={{ ...styles.resetBtn, marginTop: 10 }}
+              onClick={() => setConfirmingCreditClear(true)}
+            >
+              Clear store credit to $0
+            </button>
+          ) : (
+            <div style={styles.resetConfirmRow}>
+              <span style={styles.resetConfirmText}>
+                Clear all {fmt(creditBalance)} of store credit? This can't be undone.
+              </span>
+              <button
+                style={styles.resetConfirmBtn}
+                onClick={() => { setCreditBalance(0); setConfirmingCreditClear(false); }}
+              >
+                Yes, clear it
+              </button>
+              <button style={styles.resetCancelBtn} onClick={() => setConfirmingCreditClear(false)}>
+                Cancel
+              </button>
+            </div>
+          )
+        )}
       </div>
 
       <div style={styles.settingsSection}>
@@ -2085,6 +2146,26 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
         <div style={styles.dataNote}>
           Your catalog and sales history are saved automatically and will still be here next time you open this.
         </div>
+
+        {duplicateIdCount > 0 && (
+          <div style={styles.dupeWarningBox}>
+            <div style={styles.dupeWarningText}>
+              Found {duplicateIdCount} product{duplicateIdCount > 1 ? "s" : ""} sharing an ID with another one —
+              this can cause tapping one item to accidentally affect a different one. Fix it below.
+            </div>
+            <button style={styles.dupeFixBtn} onClick={fixDuplicateIds}>
+              Fix duplicate product IDs
+            </button>
+          </div>
+        )}
+        {dupeFixResult !== null && (
+          <div style={styles.dupeFixedNote}>
+            {dupeFixResult > 0
+              ? `Fixed ${dupeFixResult} product${dupeFixResult > 1 ? "s" : ""} with a duplicate ID.`
+              : "No duplicate IDs found — nothing to fix."}
+          </div>
+        )}
+
         <div style={styles.exampleBtnRow}>
           <button
             style={styles.exampleBtn}
@@ -2130,6 +2211,7 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
     </div>
   );
 }
+
 
 const INK = "#23262B";
 const PAPER = "#F5F6F3";
@@ -2693,7 +2775,18 @@ const styles = {
     padding: "8px 12px", fontSize: 12.5, marginBottom: 14,
   },
   dataNote: { fontSize: 12.5, color: MUTED, marginBottom: 12 },
+  dupeWarningBox: {
+    background: "#FBEED2", border: "1px solid #E2C285", borderRadius: 8,
+    padding: "12px 14px", marginBottom: 14,
+  },
+  dupeWarningText: { fontSize: 12.5, color: "#7A5210", lineHeight: 1.4, marginBottom: 10 },
+  dupeFixBtn: {
+    background: "#7A5210", color: "#FFFFFF", border: "none", borderRadius: 7,
+    padding: "8px 14px", fontSize: 12.5, fontWeight: 600,
+  },
+  dupeFixedNote: { fontSize: 12.5, color: TEAL, fontWeight: 500, marginBottom: 14 },
   exampleBtnRow: { display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" },
+  creditAdjustRow: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" },
   exampleBtn: {
     background: "none", border: `1px solid ${BORDER}`, borderRadius: 7,
     padding: "8px 14px", fontSize: 12.5, fontWeight: 500, color: INK,
