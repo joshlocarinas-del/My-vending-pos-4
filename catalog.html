@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Inventory</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #F5F6F3; }
+  #root { min-height: 100vh; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div id="root">Loading…</div>
+<script>
+  window.addEventListener("error", function (e) {
+    var root = document.getElementById("root");
+    if (root && root.textContent.indexOf("Loading") !== -1) {
+      root.innerHTML =
+        '<div style="font-family: monospace; padding: 24px; color: #B0413E; white-space: pre-wrap;">' +
+        "Something failed to load:\n\n" + (e.message || "Unknown error") +
+        "\n\nTry refreshing the page." + "</div>";
+    }
+  });
+</script>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAlbTncs-FQB97S46bsUOZBSeu5jHkhJfQ",
+  authDomain: "vendor-pos-ce47b.firebaseapp.com",
+  projectId: "vendor-pos-ce47b",
+  storageBucket: "vendor-pos-ce47b.firebasestorage.app",
+  messagingSenderId: "311568022445",
+  appId: "1:311568022445:web:0714f2a3f5115f2e12ff24",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+const INK = "#23262B";
+const PAPER = "#F5F6F3";
+const AMBER_DARK = "#7A5210";
+const TEAL = "#235349";
+const MUTED = "#6B6E68";
+const BORDER = "#DAD8D0";
+const fmt = (n) => `$${Number(n || 0).toFixed(2)}`;
+
+function getShopId() {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("shop");
+}
+
+function Catalog() {
+  const [state, setState] = useState({ status: "loading" }); // loading | ok | notfound | error | noid
+
+  useEffect(() => {
+    const shopId = getShopId();
+    if (!shopId) {
+      setState({ status: "noid" });
+      return;
+    }
+    db.collection("publicCatalogs")
+      .doc(shopId)
+      .get()
+      .then((snap) => {
+        if (!snap.exists) {
+          setState({ status: "notfound" });
+          return;
+        }
+        setState({ status: "ok", data: snap.data() });
+      })
+      .catch((err) => {
+        setState({ status: "error", message: err.message });
+      });
+  }, []);
+
+  if (state.status === "loading") {
+    return <Centered>Loading inventory…</Centered>;
+  }
+  if (state.status === "noid") {
+    return <Centered>This link is missing a shop ID. Ask the seller for the correct link.</Centered>;
+  }
+  if (state.status === "notfound") {
+    return <Centered>This seller hasn't published their inventory yet.</Centered>;
+  }
+  if (state.status === "error") {
+    return <Centered>Couldn't load this inventory: {state.message}</Centered>;
+  }
+
+  const { shopName, items, updatedAt } = state.data;
+  const categories = [...new Set(items.map((i) => i.cat))];
+
+  return (
+    <div style={styles.app}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap');
+        * { box-sizing: border-box; }
+        a { color: inherit; }
+      `}</style>
+      <div style={styles.header}>
+        <div style={styles.logo}>{shopName || "Inventory"}</div>
+        {updatedAt && (
+          <div style={styles.sub}>
+            Updated {new Date(updatedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
+          </div>
+        )}
+      </div>
+
+      {items.length === 0 ? (
+        <div style={styles.empty}>Nothing in stock right now — check back soon.</div>
+      ) : (
+        categories.map((cat) => {
+          const catItems = items.filter((i) => i.cat === cat);
+          return (
+            <div key={cat} style={styles.catSection}>
+              <div style={styles.catHeading}>{cat}</div>
+              <div style={styles.grid}>
+                {catItems.map((item, idx) => (
+                  <div key={idx} style={styles.card}>
+                    {item.url && (
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={styles.linkBtn}
+                        aria-label="Open reference link"
+                      >
+                        ↗
+                      </a>
+                    )}
+                    <div style={styles.tagRow}>
+                      {item.tag && <div style={styles.tag}>{item.tag}</div>}
+                      {item.condition && <div style={styles.condition}>{item.condition}</div>}
+                    </div>
+                    <div style={styles.name}>{item.name}</div>
+                    <div style={styles.price}>{fmt(item.value)}</div>
+                    {typeof item.stock === "number" && (
+                      <div style={styles.stock}>{item.stock} in stock</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function Centered({ children }) {
+  return (
+    <div style={{
+      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: "'Inter', sans-serif", color: MUTED, fontSize: 14, textAlign: "center", padding: 24,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+const styles = {
+  app: { fontFamily: "'Inter', sans-serif", background: PAPER, color: INK, minHeight: "100vh", padding: 20, maxWidth: 980, margin: "0 auto" },
+  header: { marginBottom: 24 },
+  logo: { fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, fontSize: 20, letterSpacing: "0.02em" },
+  sub: { fontSize: 12, color: MUTED, marginTop: 4 },
+  empty: { fontSize: 14, color: MUTED, padding: "40px 0", textAlign: "center" },
+  catSection: { marginBottom: 28 },
+  catHeading: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, fontWeight: 600, textTransform: "uppercase",
+    letterSpacing: "0.05em", color: MUTED, marginBottom: 10, borderBottom: `1px solid ${BORDER}`, paddingBottom: 6,
+  },
+  grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 },
+  card: {
+    background: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: 10, padding: "14px 12px", position: "relative",
+  },
+  linkBtn: {
+    position: "absolute", top: 8, right: 8, width: 22, height: 22, borderRadius: 6,
+    border: `1px solid ${BORDER}`, background: "#FFFFFF", display: "flex", alignItems: "center",
+    justifyContent: "center", fontSize: 12, textDecoration: "none", color: MUTED,
+  },
+  tagRow: { display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" },
+  tag: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: AMBER_DARK,
+    background: "#FBEED2", display: "inline-block", padding: "2px 6px", borderRadius: 4,
+  },
+  condition: {
+    fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, fontWeight: 600, color: INK,
+    background: "#F0EEE8", display: "inline-block", padding: "2px 6px", borderRadius: 4,
+  },
+  name: { fontSize: 13.5, fontWeight: 500, marginBottom: 4, paddingRight: 20 },
+  price: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 15, fontWeight: 600, color: TEAL },
+  stock: { fontSize: 10.5, color: MUTED, marginTop: 4, fontFamily: "'IBM Plex Mono', monospace" },
+};
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<Catalog />);
+</script>
+</body>
+</html>
