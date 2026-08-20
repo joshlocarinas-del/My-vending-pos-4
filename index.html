@@ -641,7 +641,7 @@ function POS() {
     setNote("");
   }
 
-  function addCustomItem({ name, value, cat, ratePct, url, condition }) {
+  function addCustomItem({ name, value, cat, ratePct, url, condition, marketPrice }) {
     setCart((prev) => [
       ...prev,
       {
@@ -654,6 +654,7 @@ function POS() {
         customRatePct: ratePct,
         url: url || "",
         condition: condition || "",
+        marketPrice: marketPrice || null,
       },
     ]);
   }
@@ -747,6 +748,7 @@ function POS() {
               cost: newCost,
               url: item.url ? item.url : existing.url,
               condition: item.condition ? item.condition : existing.condition,
+              marketPrice: item.marketPrice != null ? item.marketPrice : existing.marketPrice,
             };
           } else {
             next.push({
@@ -758,6 +760,7 @@ function POS() {
               stock: item.qty,
               url: item.url || "",
               condition: item.condition || "",
+              marketPrice: item.marketPrice != null ? item.marketPrice : null,
               tag: (item.tag && item.tag !== "CUSTOM" ? item.tag : item.name.slice(0, 4)).toUpperCase(),
             });
           }
@@ -1475,6 +1478,7 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
   const [manualOffer, setManualOffer] = useState("");
   const [url, setUrl] = useState("");
   const [condition, setCondition] = useState("");
+  const [marketPrice, setMarketPrice] = useState("");
 
   function openPanel() {
     setCat((c) => c || categories[0] || "");
@@ -1491,6 +1495,7 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
     setManualOffer("");
     setUrl("");
     setCondition("");
+    setMarketPrice("");
   }
 
   function submit() {
@@ -1502,6 +1507,7 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
       !isNaN(overrideNum) && v > 0
         ? Math.max(1, Math.min(100, (overrideNum / v) * 100))
         : Math.max(1, Math.min(100, ratePct || 1));
+    const marketPriceNum = parseFloat(marketPrice);
     onAdd({
       name: cleanName,
       value: v,
@@ -1509,6 +1515,7 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
       ratePct: finalRatePct,
       url: url.trim(),
       condition: isSinglesCategory(cat) ? condition : "",
+      marketPrice: isNaN(marketPriceNum) ? null : marketPriceNum,
     });
     closePanel();
   }
@@ -1628,6 +1635,20 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
         value={url}
         onChange={(e) => setUrl(e.target.value)}
       />
+
+      <label style={styles.customLabel}>Market price at that link (optional)</label>
+      <div style={styles.customValueRow}>
+        <span style={styles.priceEditDollar}>$</span>
+        <input
+          style={styles.customInput}
+          type="number"
+          step="0.01"
+          min="0"
+          placeholder="What the link says it's worth"
+          value={marketPrice}
+          onChange={(e) => setMarketPrice(e.target.value)}
+        />
+      </div>
 
       <div style={styles.customButtonRow}>
         <button style={styles.customCancelBtn} onClick={closePanel}>
@@ -2090,7 +2111,7 @@ function ReceiptModal({ sale, onClose }) {
 
 function SettingsView({ categories, setCategories, products, setProducts, history, setHistory, customers, setCustomers, shopName, setShopName }) {
   const [newCat, setNewCat] = useState("");
-  const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "", condition: "" });
+  const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "", condition: "", marketPrice: "" });
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [confirmingCreditClear, setConfirmingCreditClear] = useState(false);
   const [adjustingCustomerId, setAdjustingCustomerId] = useState(null);
@@ -2191,6 +2212,7 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
     const value = parseFloat(draft.value);
     const cost = draft.cost === "" ? 0 : parseFloat(draft.cost);
     const stock = draft.stock === "" ? 0 : parseInt(draft.stock);
+    const marketPriceNum = draft.marketPrice === "" ? null : parseFloat(draft.marketPrice);
     if (!name || isNaN(value) || value < 0 || !draft.cat) return;
     setProducts((prev) => [
       ...prev,
@@ -2204,9 +2226,10 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
         condition: isSinglesCategory(draft.cat) ? draft.condition : "",
         tag: draft.tag.trim().slice(0, 4).toUpperCase() || "—",
         url: draft.url.trim(),
+        marketPrice: isNaN(marketPriceNum) ? null : marketPriceNum,
       },
     ]);
-    setDraft({ name: "", value: "", cost: "", stock: "", cat: draft.cat, tag: "", url: "", condition: "" });
+    setDraft({ name: "", value: "", cost: "", stock: "", cat: draft.cat, tag: "", url: "", condition: "", marketPrice: "" });
   }
 
   return (
@@ -2258,6 +2281,8 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
             <span style={{ width: 70 }}>Condition</span>
             <span style={{ width: 56 }}>Tag</span>
             <span style={{ width: 140 }}>Link</span>
+            <span style={{ width: 80 }}>Market $</span>
+            <span style={{ width: 90 }}>vs Market</span>
             <span style={{ width: 32 }} />
           </div>
           {products.map((p) => {
@@ -2346,6 +2371,39 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
                     <LinkIcon size={13} color={MUTED} />
                   </button>
                 </div>
+                <input
+                  style={{ ...styles.tableInput, width: 80 }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="—"
+                  defaultValue={p.marketPrice != null ? p.marketPrice : ""}
+                  onBlur={(e) => {
+                    const v = e.target.value === "" ? null : parseFloat(e.target.value);
+                    updateProduct(p.id, "marketPrice", isNaN(v) ? null : v);
+                  }}
+                />
+                {p.marketPrice != null ? (
+                  (() => {
+                    const diff = p.value - p.marketPrice;
+                    const diffPct = p.marketPrice > 0 ? (diff / p.marketPrice) * 100 : 0;
+                    return (
+                      <span
+                        style={{
+                          ...styles.marginTag,
+                          width: 90,
+                          color: diff > 0 ? "#B0413E" : diff < 0 ? TEAL : MUTED,
+                        }}
+                      >
+                        {diff > 0 ? "+" : ""}
+                        {fmt(diff)}
+                        <span style={styles.marginPct}> ({diffPct > 0 ? "+" : ""}{diffPct.toFixed(0)}%)</span>
+                      </span>
+                    );
+                  })()
+                ) : (
+                  <span style={{ width: 90, color: MUTED, fontSize: 12 }}>—</span>
+                )}
                 <button
                   className="icon-btn"
                   style={{ ...styles.iconBtn, width: 32 }}
@@ -2430,6 +2488,15 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
             placeholder="Link (optional)"
             value={draft.url}
             onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+          />
+          <input
+            style={{ ...styles.tableInput, width: 80 }}
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="Market $"
+            value={draft.marketPrice}
+            onChange={(e) => setDraft({ ...draft, marketPrice: e.target.value })}
           />
           <button style={styles.addBtn} onClick={addProduct}>
             <Plus size={14} /> Add
