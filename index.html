@@ -113,6 +113,34 @@ function makeFirestoreStorage(uid) {
   };
 }
 
+/* Publishes a public, read-only snapshot of sellable inventory anyone can view without signing in */
+function makeCatalogTools(uid) {
+  const catalogPath = window.location.pathname.replace(/index\.html$/, "").replace(/[^/]*$/, "");
+  const shareUrl = `${window.location.origin}${catalogPath}catalog.html?shop=${uid}`;
+  return {
+    shareUrl,
+    publish: async (shopName, products) => {
+      const items = products
+        .filter((p) => typeof p.stock !== "number" || p.stock > 0)
+        .map((p) => ({
+          name: p.name,
+          value: p.value,
+          cat: p.cat,
+          tag: p.tag || "",
+          condition: p.condition || "",
+          url: p.url || "",
+          stock: typeof p.stock === "number" ? p.stock : null,
+        }));
+      await db.collection("publicCatalogs").doc(uid).set({
+        shopName: shopName || "Inventory",
+        items,
+        updatedAt: Date.now(),
+      });
+      return items.length;
+    },
+  };
+}
+
 /* Builds a window.storage-compatible object backed by browser localStorage (used for test mode, no account needed) */
 function makeLocalStorage() {
   return {
@@ -217,7 +245,12 @@ function AppRoot() {
 
   useEffect(() => {
     const unsub = auth.onAuthStateChanged((u) => {
-      if (u) window.storage = makeFirestoreStorage(u.uid);
+      if (u) {
+        window.storage = makeFirestoreStorage(u.uid);
+        window.catalogTools = makeCatalogTools(u.uid);
+      } else {
+        window.catalogTools = null;
+      }
       setUser(u);
     });
     return unsub;
@@ -231,6 +264,7 @@ function AppRoot() {
 
   function handleSkip() {
     window.storage = makeLocalStorage();
+    window.catalogTools = null;
     setGuestMode(true);
   }
 
@@ -317,17 +351,78 @@ function AppRoot() {
 }
 
 const DEFAULT_CATEGORIES = ["Singles", "Sealed Product", "Graded", "Bulk/Lots"];
+const CONDITIONS = [
+  { value: "NM", label: "Near Mint (NM)" },
+  { value: "LP", label: "Lightly Played (LP)" },
+  { value: "MP", label: "Moderately Played (MP)" },
+  { value: "HP", label: "Heavily Played (HP)" },
+  { value: "DMG", label: "Damaged (DMG)" },
+];
+function isSinglesCategory(cat) {
+  return (cat || "").trim().toLowerCase() === "singles";
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    if (typeof console !== "undefined") console.error("Caught render error:", error, info);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div
+          style={{
+            padding: 24,
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontSize: 13,
+            color: "#B0413E",
+            whiteSpace: "pre-wrap",
+            lineHeight: 1.6,
+          }}
+        >
+          Something went wrong loading this section:{"\n\n"}
+          {this.state.error.message || String(this.state.error)}
+          {"\n\n"}
+          <button
+            onClick={() => this.setState({ error: null })}
+            style={{
+              marginTop: 8,
+              padding: "8px 16px",
+              borderRadius: 8,
+              border: "1px solid #B0413E",
+              background: "none",
+              color: "#B0413E",
+              fontFamily: "inherit",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const DEFAULT_PRODUCTS = [
-  { id: "p1", name: "Charizard ex (example)", value: 45.0, cost: 30.0, cat: "Singles", tag: "CHZ", stock: 3 },
-  { id: "p2", name: "Pikachu VMAX (example)", value: 18.0, cost: 11.0, cat: "Singles", tag: "PIK", stock: 5 },
+  { id: "p1", name: "Charizard ex (example)", value: 45.0, cost: 30.0, cat: "Singles", tag: "CHZ", stock: 3, condition: "NM" },
+  { id: "p2", name: "Pikachu VMAX (example)", value: 18.0, cost: 11.0, cat: "Singles", tag: "PIK", stock: 5, condition: "LP" },
   { id: "p3", name: "Booster Pack (example)", value: 4.5, cost: 3.25, cat: "Sealed Product", tag: "PACK", stock: 12 },
   { id: "p4", name: "Elite Trainer Box (example)", value: 42.0, cost: 32.0, cat: "Sealed Product", tag: "ETB", stock: 2 },
   { id: "p5", name: "PSA 10 Slab (example)", value: 120.0, cost: 85.0, cat: "Graded", tag: "PSA10", stock: 1 },
   { id: "p6", name: "Common Bulk Lot (example)", value: 5.0, cost: 1.0, cat: "Bulk/Lots", tag: "BULK", stock: 8 },
 ];
 
-const fmt = (n) => `$${n.toFixed(2)}`;
+const fmt = (n) => `$${(Number(n) || 0).toFixed(2)}`;
 function newProductId() {
   return `p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 }
@@ -378,6 +473,7 @@ function POS() {
   const [cashOutAmount, setCashOutAmount] = useState(0);
   const [note, setNote] = useState("");
   const [funds, setFunds] = useState(0);
+  const [shopName, setShopName] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
 
@@ -401,6 +497,7 @@ function POS() {
             ]);
           }
           if (typeof cfg.funds === "number") setFunds(cfg.funds);
+          if (typeof cfg.shopName === "string") setShopName(cfg.shopName);
         }
       } catch (e) {
         // no saved config yet, keep defaults
@@ -426,7 +523,7 @@ function POS() {
       try {
         const result = await window.storage.set(
           "pos-config",
-          JSON.stringify({ categories, products, buyRatePct, tradeRatePct, customers, funds }),
+          JSON.stringify({ categories, products, buyRatePct, tradeRatePct, customers, funds, shopName }),
           false
         );
         setSaveError(!result);
@@ -434,7 +531,7 @@ function POS() {
         setSaveError(true);
       }
     })();
-  }, [loaded, categories, products, buyRatePct, tradeRatePct, customers, funds]);
+  }, [loaded, categories, products, buyRatePct, tradeRatePct, customers, funds, shopName]);
 
   // Save history whenever it changes (after initial load)
   useEffect(() => {
@@ -544,7 +641,7 @@ function POS() {
     setNote("");
   }
 
-  function addCustomItem({ name, value, cat, ratePct, url }) {
+  function addCustomItem({ name, value, cat, ratePct, url, condition }) {
     setCart((prev) => [
       ...prev,
       {
@@ -556,6 +653,7 @@ function POS() {
         tag: "CUSTOM",
         customRatePct: ratePct,
         url: url || "",
+        condition: condition || "",
       },
     ]);
   }
@@ -648,6 +746,7 @@ function POS() {
               stock: newStock,
               cost: newCost,
               url: item.url ? item.url : existing.url,
+              condition: item.condition ? item.condition : existing.condition,
             };
           } else {
             next.push({
@@ -658,6 +757,7 @@ function POS() {
               cat: item.cat,
               stock: item.qty,
               url: item.url || "",
+              condition: item.condition || "",
               tag: (item.tag && item.tag !== "CUSTOM" ? item.tag : item.name.slice(0, 4)).toUpperCase(),
             });
           }
@@ -752,32 +852,43 @@ function POS() {
         </div>
       </div>
 
-      {view === "history" && <HistoryView history={history} setHistory={setHistory} />}
+      {view === "history" && (
+        <ErrorBoundary>
+          <HistoryView history={history} setHistory={setHistory} />
+        </ErrorBoundary>
+      )}
 
       {view === "value" && (
-        <ValueView
-          products={products}
-          categories={categories}
-          funds={funds}
-          creditBalance={totalCreditOwed}
-          history={history}
-        />
+        <ErrorBoundary>
+          <ValueView
+            products={products}
+            categories={categories}
+            funds={funds}
+            creditBalance={totalCreditOwed}
+            history={history}
+          />
+        </ErrorBoundary>
       )}
 
       {view === "settings" && (
-        <SettingsView
-          categories={categories}
-          setCategories={setCategories}
-          products={products}
-          setProducts={setProducts}
-          history={history}
-          setHistory={setHistory}
-          customers={customers}
-          setCustomers={setCustomers}
-        />
+        <ErrorBoundary>
+          <SettingsView
+            categories={categories}
+            setCategories={setCategories}
+            products={products}
+            setProducts={setProducts}
+            history={history}
+            setHistory={setHistory}
+            customers={customers}
+            setCustomers={setCustomers}
+            shopName={shopName}
+            setShopName={setShopName}
+          />
+        </ErrorBoundary>
       )}
 
       {view === "register" && (
+        <ErrorBoundary>
         <>
           {/* Mode tabs */}
           <div style={styles.modeRow}>
@@ -902,7 +1013,27 @@ function POS() {
                               <LinkIcon size={12} color={MUTED} />
                             </button>
                           )}
-                          <div style={styles.prodTag}>{p.tag}</div>
+                          <div style={styles.tagRow}>
+                            <div style={styles.prodTag}>{p.tag}</div>
+                            {isSinglesCategory(p.cat) && (
+                              <select
+                                value={p.condition || ""}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) => {
+                                  const newCondition = e.target.value;
+                                  setProducts((prev) =>
+                                    prev.map((x) => (x.id === p.id ? { ...x, condition: newCondition } : x))
+                                  );
+                                }}
+                                style={styles.conditionSelect}
+                              >
+                                <option value="">Condition</option>
+                                {CONDITIONS.map((c) => (
+                                  <option key={c.value} value={c.value}>{c.value}</option>
+                                ))}
+                              </select>
+                            )}
+                          </div>
                           <div style={styles.prodName}>{p.name}</div>
                           <div style={styles.prodPrice}>{fmt(p.value)}</div>
                           {typeof p.stock === "number" && (
@@ -996,7 +1127,10 @@ function POS() {
                     return (
                       <div key={item.id} style={styles.cartRow}>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={styles.cartItemName}>{item.name}</div>
+                          <div style={styles.cartItemName}>
+                            {item.name}
+                            {item.condition && <span style={styles.cartItemCondition}> ({item.condition})</span>}
+                          </div>
                           {mode === "sell" ? (
                             <div style={styles.priceEditRow}>
                               <span style={styles.priceEditDollar}>$</span>
@@ -1268,6 +1402,7 @@ function POS() {
             </div>
           </div>
         </>
+        </ErrorBoundary>
       )}
 
       {receipt && <ReceiptModal sale={receipt} onClose={() => setReceipt(null)} />}
@@ -1339,6 +1474,7 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
   const [ratePct, setRatePct] = useState(defaultRate);
   const [manualOffer, setManualOffer] = useState("");
   const [url, setUrl] = useState("");
+  const [condition, setCondition] = useState("");
 
   function openPanel() {
     setCat((c) => c || categories[0] || "");
@@ -1354,6 +1490,7 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
     setRatePct(defaultRate);
     setManualOffer("");
     setUrl("");
+    setCondition("");
   }
 
   function submit() {
@@ -1365,7 +1502,14 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
       !isNaN(overrideNum) && v > 0
         ? Math.max(1, Math.min(100, (overrideNum / v) * 100))
         : Math.max(1, Math.min(100, ratePct || 1));
-    onAdd({ name: cleanName, value: v, cat, ratePct: finalRatePct, url: url.trim() });
+    onAdd({
+      name: cleanName,
+      value: v,
+      cat,
+      ratePct: finalRatePct,
+      url: url.trim(),
+      condition: isSinglesCategory(cat) ? condition : "",
+    });
     closePanel();
   }
 
@@ -1394,6 +1538,22 @@ function CustomItemPanel({ mode, categories, defaultRate, onAdd, forceOpen }) {
           <option key={c} value={c}>{c}</option>
         ))}
       </select>
+
+      {isSinglesCategory(cat) && (
+        <>
+          <label style={styles.customLabel}>Condition</label>
+          <select
+            style={styles.customInput}
+            value={condition}
+            onChange={(e) => setCondition(e.target.value)}
+          >
+            <option value="">Not specified</option>
+            {CONDITIONS.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </>
+      )}
 
       <label style={styles.customLabel}>2. What is it?</label>
       <input
@@ -1882,6 +2042,7 @@ function ReceiptModal({ sale, onClose }) {
               <div key={i.id} style={styles.receiptLine}>
                 <span>
                   {i.qty}× {i.name}
+                  {i.condition && <span style={styles.receiptAdjustedNote}> ({i.condition})</span>}
                   {wasAdjusted && (
                     <span style={styles.receiptAdjustedNote}> (was {fmt(i.origValue)})</span>
                   )}
@@ -1927,9 +2088,9 @@ function ReceiptModal({ sale, onClose }) {
   );
 }
 
-function SettingsView({ categories, setCategories, products, setProducts, history, setHistory, customers, setCustomers }) {
+function SettingsView({ categories, setCategories, products, setProducts, history, setHistory, customers, setCustomers, shopName, setShopName }) {
   const [newCat, setNewCat] = useState("");
-  const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "" });
+  const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "", condition: "" });
   const [confirmingReset, setConfirmingReset] = useState(false);
   const [confirmingCreditClear, setConfirmingCreditClear] = useState(false);
   const [adjustingCustomerId, setAdjustingCustomerId] = useState(null);
@@ -1938,6 +2099,7 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
   const [newCustomerAmount, setNewCustomerAmount] = useState("");
   const [confirmingDeleteCustomerId, setConfirmingDeleteCustomerId] = useState(null);
   const [dupeFixResult, setDupeFixResult] = useState(null);
+  const [publishStatus, setPublishStatus] = useState("");
 
   const totalCreditOwed = customers.reduce((s, c) => s + (c.creditBalance || 0), 0);
 
@@ -2039,11 +2201,12 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
         cost: isNaN(cost) ? 0 : cost,
         stock: isNaN(stock) ? 0 : Math.max(0, stock),
         cat: draft.cat,
+        condition: isSinglesCategory(draft.cat) ? draft.condition : "",
         tag: draft.tag.trim().slice(0, 4).toUpperCase() || "—",
         url: draft.url.trim(),
       },
     ]);
-    setDraft({ name: "", value: "", cost: "", stock: "", cat: draft.cat, tag: "", url: "" });
+    setDraft({ name: "", value: "", cost: "", stock: "", cat: draft.cat, tag: "", url: "", condition: "" });
   }
 
   return (
@@ -2092,6 +2255,7 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
             <span style={{ width: 70 }}>Margin</span>
             <span style={{ width: 60 }}>Stock</span>
             <span style={{ width: 130 }}>Category</span>
+            <span style={{ width: 70 }}>Condition</span>
             <span style={{ width: 56 }}>Tag</span>
             <span style={{ width: 140 }}>Link</span>
             <span style={{ width: 32 }} />
@@ -2144,6 +2308,20 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
                     <option key={c} value={c}>{c}</option>
                   ))}
                 </select>
+                {isSinglesCategory(p.cat) ? (
+                  <select
+                    style={{ ...styles.tableInput, width: 70 }}
+                    value={p.condition || ""}
+                    onChange={(e) => updateProduct(p.id, "condition", e.target.value)}
+                  >
+                    <option value="">—</option>
+                    {CONDITIONS.map((c) => (
+                      <option key={c.value} value={c.value}>{c.value}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span style={{ width: 70, color: MUTED, fontSize: 12, textAlign: "center" }}>—</span>
+                )}
                 <input
                   style={{ ...styles.tableInput, width: 56, textTransform: "uppercase" }}
                   defaultValue={p.tag}
@@ -2225,6 +2403,20 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
               <option key={c} value={c}>{c}</option>
             ))}
           </select>
+          {isSinglesCategory(draft.cat) ? (
+            <select
+              style={{ ...styles.tableInput, width: 70 }}
+              value={draft.condition}
+              onChange={(e) => setDraft({ ...draft, condition: e.target.value })}
+            >
+              <option value="">—</option>
+              {CONDITIONS.map((c) => (
+                <option key={c.value} value={c.value}>{c.value}</option>
+              ))}
+            </select>
+          ) : (
+            <span style={{ width: 70 }} />
+          )}
           <input
             style={{ ...styles.tableInput, width: 56 }}
             placeholder="TAG"
@@ -2246,35 +2438,152 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
       </div>
 
       <div style={styles.settingsSection}>
-        <div style={styles.settingsHeading}>Store Credit</div>
+        <div style={styles.settingsHeading}>Customers</div>
         <div style={styles.dataNote}>
-          Current balance owed to customers: <strong>{fmt(creditBalance)}</strong>. This is automatically
-          applied on a customer's next sale — use this to fix a mistake or manually adjust it.
+          Total owed across everyone: <strong>{fmt(totalCreditOwed)}</strong>. A customer's credit is
+          automatically applied the next time they're selected on a sale.
         </div>
 
-        {!adjustingCredit ? (
-          <button style={styles.exampleBtn} onClick={() => setAdjustingCredit(true)}>
-            Add / remove credit
-          </button>
+        {customers.length === 0 ? (
+          <div style={styles.emptyCart}>
+            No customers yet — they're added automatically when you trade something in, or you can add one below.
+          </div>
         ) : (
-          <div style={styles.creditAdjustRow}>
+          <div style={styles.customerTable}>
+            <div style={styles.customerTableHead}>
+              <span style={{ flex: 2 }}>Name</span>
+              <span style={{ width: 110 }}>Credit</span>
+              <span style={{ width: 32 }} />
+            </div>
+            {customers.map((c) => (
+              <div key={c.id} style={styles.customerTableRow}>
+                <input
+                  style={{ ...styles.tableInput, flex: 2 }}
+                  defaultValue={c.name}
+                  onBlur={(e) => {
+                    const name = e.target.value.trim();
+                    if (name) setCustomers((prev) => prev.map((x) => (x.id === c.id ? { ...x, name } : x)));
+                  }}
+                />
+                {adjustingCustomerId === c.id ? (
+                  <div style={styles.customerAdjustRow}>
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="+50 or -20"
+                      value={creditAdjustAmount}
+                      onChange={(e) => setCreditAdjustAmount(e.target.value)}
+                      style={styles.fundsAddInput}
+                      autoFocus
+                      onKeyDown={(e) => e.key === "Enter" && applyCreditAdjust(c.id)}
+                    />
+                    <button style={styles.fundsAddConfirm} onClick={() => applyCreditAdjust(c.id)}>Save</button>
+                    <button
+                      style={styles.fundsAddCancel}
+                      onClick={() => { setAdjustingCustomerId(null); setCreditAdjustAmount(""); }}
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    style={{ ...styles.tableInput, width: 110, textAlign: "left", cursor: "pointer" }}
+                    onClick={() => { setAdjustingCustomerId(c.id); setCreditAdjustAmount(""); }}
+                  >
+                    {fmt(c.creditBalance)}
+                  </button>
+                )}
+                {confirmingDeleteCustomerId === c.id ? (
+                  <div style={styles.customerDeleteConfirmRow}>
+                    <button style={styles.resetConfirmBtn} onClick={() => deleteCustomer(c.id)}>Yes</button>
+                    <button style={styles.resetCancelBtn} onClick={() => setConfirmingDeleteCustomerId(null)}>No</button>
+                  </div>
+                ) : (
+                  <button
+                    className="icon-btn"
+                    style={{ ...styles.iconBtn, width: 32 }}
+                    onClick={() => setConfirmingDeleteCustomerId(c.id)}
+                    aria-label={`Delete ${c.name}`}
+                  >
+                    <Trash2 size={14} color={MUTED} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={styles.addProductRow}>
+          <input
+            style={{ ...styles.tableInput, flex: 2 }}
+            placeholder="New customer name"
+            value={newCustomerName}
+            onChange={(e) => setNewCustomerName(e.target.value)}
+          />
+          <input
+            style={{ ...styles.tableInput, width: 110 }}
+            type="number"
+            step="0.01"
+            min="0"
+            placeholder="Starting credit"
+            value={newCustomerAmount}
+            onChange={(e) => setNewCustomerAmount(e.target.value)}
+          />
+          <button style={styles.addBtn} onClick={addCustomer}>
+            <Plus size={14} /> Add
+          </button>
+        </div>
+      </div>
+
+      <div style={styles.settingsSection}>
+        <div style={styles.settingsHeading}>Share Your Inventory</div>
+        {typeof window !== "undefined" && window.catalogTools ? (
+          <>
+            <div style={styles.dataNote}>
+              Publish a read-only page anyone can open — no sign-in needed — showing what you currently
+              have in stock and its price. It only updates when you click Publish, so it's safe to sell
+              at your own pace and update the public page whenever you're ready.
+            </div>
+            <label style={styles.customLabel}>Shop name (shown at the top of the page)</label>
             <input
-              type="number"
-              step="0.01"
-              placeholder="+50 or -20"
-              value={creditAdjustAmount}
-              onChange={(e) => setCreditAdjustAmount(e.target.value)}
-              style={styles.fundsAddInput}
-              autoFocus
-              onKeyDown={(e) => e.key === "Enter" && applyCreditAdjust()}
+              style={styles.customInput}
+              placeholder="e.g. Josh's Card Shop"
+              value={shopName}
+              onChange={(e) => setShopName(e.target.value)}
             />
-            <button style={styles.fundsAddConfirm} onClick={applyCreditAdjust}>Save</button>
+            <div style={styles.shareLinkRow}>
+              <input style={{ ...styles.tableInput, flex: 1 }} readOnly value={window.catalogTools.shareUrl} />
+              <button
+                style={styles.exampleBtn}
+                onClick={() => {
+                  navigator.clipboard?.writeText(window.catalogTools.shareUrl);
+                  setPublishStatus("Link copied!");
+                  setTimeout(() => setPublishStatus(""), 2000);
+                }}
+              >
+                Copy link
+              </button>
+            </div>
             <button
-              style={styles.fundsAddCancel}
-              onClick={() => { setAdjustingCredit(false); setCreditAdjustAmount(""); }}
+              style={styles.publishBtn}
+              onClick={async () => {
+                setPublishStatus("Publishing…");
+                try {
+                  const count = await window.catalogTools.publish(shopName, products);
+                  setPublishStatus(`Published ${count} item${count === 1 ? "" : "s"}.`);
+                } catch (e) {
+                  setPublishStatus("Publish failed: " + e.message);
+                }
+              }}
             >
-              Cancel
+              Publish / update catalog
             </button>
+            {publishStatus && <div style={styles.publishStatusNote}>{publishStatus}</div>}
+          </>
+        ) : (
+          <div style={styles.dataNote}>
+            Sign in with Google (from the sign-in screen) to get a shareable inventory link. This isn't
+            available in test mode since it's tied to your account.
           </div>
         )}
       </div>
@@ -2326,20 +2635,23 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
           >
             Add example products back
           </button>
-          {creditBalance > 0 && (
+          {totalCreditOwed > 0 && (
             <button style={styles.exampleBtn} onClick={() => setConfirmingCreditClear(true)}>
-              Clear store credit owed
+              Clear all store credit owed
             </button>
           )}
         </div>
         {confirmingCreditClear && (
           <div style={styles.resetConfirmRow}>
             <span style={styles.resetConfirmText}>
-              Clear all {fmt(creditBalance)} of store credit owed? This can't be undone.
+              Clear all {fmt(totalCreditOwed)} of store credit across every customer? This can't be undone.
             </span>
             <button
               style={styles.resetConfirmBtn}
-              onClick={() => { setCreditBalance(0); setConfirmingCreditClear(false); }}
+              onClick={() => {
+                setCustomers((prev) => prev.map((c) => ({ ...c, creditBalance: 0 })));
+                setConfirmingCreditClear(false);
+              }}
             >
               Yes, clear it
             </button>
@@ -2563,7 +2875,18 @@ const styles = {
     display: "inline-block",
     padding: "2px 6px",
     borderRadius: 4,
-    marginBottom: 8,
+  },
+  tagRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 8, flexWrap: "wrap" },
+  conditionSelect: {
+    fontFamily: "'IBM Plex Mono', monospace",
+    fontSize: 10,
+    fontWeight: 600,
+    color: INK,
+    background: "#F0EEE8",
+    border: "none",
+    borderRadius: 4,
+    padding: "2px 4px",
+    cursor: "pointer",
   },
   prodName: { fontSize: 13.5, fontWeight: 500, marginBottom: 4 },
   prodPrice: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, color: MUTED },
@@ -2661,6 +2984,21 @@ const styles = {
     justifyContent: "center",
     gap: 6,
   },
+  shareLinkRow: { display: "flex", gap: 8, marginTop: 8, marginBottom: 10 },
+  publishBtn: {
+    padding: "10px 16px",
+    borderRadius: 8,
+    border: "none",
+    background: INK,
+    color: PAPER,
+    fontSize: 13,
+    fontWeight: 600,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  publishStatusNote: { fontSize: 12.5, color: TEAL, fontWeight: 500, marginTop: 8 },
   cartPane: { position: "sticky", top: 20 },
   cartCard: {
     background: "#FFFFFF",
@@ -2682,6 +3020,7 @@ const styles = {
   emptyCart: { fontSize: 13, color: MUTED, padding: "12px 0" },
   cartRow: { display: "flex", alignItems: "center", gap: 8, padding: "10px 0", borderBottom: `1px solid ${BORDER}` },
   cartItemName: { fontSize: 13.5, fontWeight: 500 },
+  cartItemCondition: { fontSize: 12, fontWeight: 500, color: MUTED },
   cartItemUnit: { fontSize: 11.5, color: MUTED, marginTop: 1 },
   rateEditRowSmall: { display: "flex", alignItems: "center", gap: 4, marginTop: 2, flexWrap: "wrap" },
   priceEditRow: { display: "flex", alignItems: "center", gap: 3, marginTop: 2 },
@@ -2923,6 +3262,14 @@ const styles = {
     borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
   },
   productTable: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 },
+  customerTable: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 },
+  customerTableHead: {
+    display: "flex", gap: 8, fontSize: 11, color: MUTED, textTransform: "uppercase",
+    letterSpacing: "0.04em", padding: "0 2px", fontWeight: 600,
+  },
+  customerTableRow: { display: "flex", gap: 8, alignItems: "center" },
+  customerAdjustRow: { display: "flex", alignItems: "center", gap: 6 },
+  customerDeleteConfirmRow: { display: "flex", gap: 4 },
   productTableHead: {
     display: "flex", gap: 8, fontSize: 11, color: MUTED, textTransform: "uppercase",
     letterSpacing: "0.04em", padding: "0 2px", fontWeight: 600,
