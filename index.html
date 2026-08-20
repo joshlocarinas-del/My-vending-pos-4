@@ -2270,9 +2270,10 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
       {/* Products */}
       <div style={styles.settingsSection}>
         <div style={styles.settingsHeading}>Products</div>
-        <div style={styles.productTable}>
+        <div style={styles.tableScrollWrap}>
+        <div style={{ ...styles.productTable, minWidth: 920 }}>
           <div style={styles.productTableHead}>
-            <span style={{ flex: 2 }}>Name</span>
+            <span style={{ flex: 2, minWidth: 140 }}>Name</span>
             <span style={{ width: 80 }}>Cost</span>
             <span style={{ width: 80 }}>Value</span>
             <span style={{ width: 70 }}>Margin</span>
@@ -2417,9 +2418,9 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
           })}
         </div>
 
-        <div style={styles.addProductRow}>
+        <div style={{ ...styles.addProductRow, minWidth: 920 }}>
           <input
-            style={{ ...styles.tableInput, flex: 2 }}
+            style={{ ...styles.tableInput, flex: 2, minWidth: 140 }}
             placeholder="New product name"
             value={draft.name}
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
@@ -2501,6 +2502,7 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
           <button style={styles.addBtn} onClick={addProduct}>
             <Plus size={14} /> Add
           </button>
+        </div>
         </div>
       </div>
 
@@ -3328,6 +3330,7 @@ const styles = {
     display: "flex", alignItems: "center", gap: 5, background: INK, color: PAPER, border: "none",
     borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
   },
+  tableScrollWrap: { overflowX: "auto", WebkitOverflowScrolling: "touch", marginBottom: 4 },
   productTable: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 },
   customerTable: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 },
   customerTableHead: {
