@@ -1671,6 +1671,15 @@ function Row({ label, value }) {
   );
 }
 
+function MiniField({ label, children }) {
+  return (
+    <div style={styles.miniField}>
+      <span style={styles.miniFieldLabel}>{label}</span>
+      {children}
+    </div>
+  );
+}
+
 function formatDayLabel(date) {
   const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
   const diffDays = Math.round((startOfDay(new Date()) - startOfDay(date)) / 86400000);
@@ -2270,241 +2279,270 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
       {/* Products */}
       <div style={styles.settingsSection}>
         <div style={styles.settingsHeading}>Products</div>
-        <div style={styles.tableScrollWrap}>
-        <div style={{ ...styles.productTable, minWidth: 920 }}>
-          <div style={styles.productTableHead}>
-            <span style={{ flex: 2, minWidth: 140 }}>Name</span>
-            <span style={{ width: 80 }}>Cost</span>
-            <span style={{ width: 80 }}>Value</span>
-            <span style={{ width: 70 }}>Margin</span>
-            <span style={{ width: 60 }}>Stock</span>
-            <span style={{ width: 130 }}>Category</span>
-            <span style={{ width: 70 }}>Condition</span>
-            <span style={{ width: 56 }}>Tag</span>
-            <span style={{ width: 140 }}>Link</span>
-            <span style={{ width: 80 }}>Market $</span>
-            <span style={{ width: 90 }}>vs Market</span>
-            <span style={{ width: 32 }} />
-          </div>
+        <div style={styles.productCardList}>
           {products.map((p) => {
             const cost = p.cost || 0;
             const margin = p.value - cost;
             const marginPct = p.value > 0 ? (margin / p.value) * 100 : 0;
+            const marketDiff = p.marketPrice != null ? p.value - p.marketPrice : null;
+            const marketDiffPct = p.marketPrice > 0 ? (marketDiff / p.marketPrice) * 100 : 0;
             return (
-              <div key={p.id} style={styles.productTableRow}>
-                <input
-                  style={{ ...styles.tableInput, flex: 2 }}
-                  defaultValue={p.name}
-                  onBlur={(e) => updateProduct(p.id, "name", e.target.value)}
-                />
-                <input
-                  style={{ ...styles.tableInput, width: 80 }}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  defaultValue={p.cost}
-                  onBlur={(e) => updateProduct(p.id, "cost", parseFloat(e.target.value) || 0)}
-                />
-                <input
-                  style={{ ...styles.tableInput, width: 80 }}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  defaultValue={p.value}
-                  onBlur={(e) => updateProduct(p.id, "value", parseFloat(e.target.value) || 0)}
-                />
-                <span style={{ ...styles.marginTag, color: margin >= 0 ? TEAL : "#B0413E" }}>
-                  {fmt(margin)}
-                  <span style={styles.marginPct}> ({marginPct.toFixed(0)}%)</span>
-                </span>
-                <input
-                  style={{ ...styles.tableInput, width: 60 }}
-                  type="number"
-                  step="1"
-                  min="0"
-                  defaultValue={p.stock ?? 0}
-                  onBlur={(e) => updateProduct(p.id, "stock", Math.max(0, parseInt(e.target.value) || 0))}
-                />
-                <select
-                  style={{ ...styles.tableInput, width: 130 }}
-                  value={p.cat}
-                  onChange={(e) => updateProduct(p.id, "cat", e.target.value)}
-                >
-                  {categories.map((c) => (
-                    <option key={c} value={c}>{c}</option>
-                  ))}
-                </select>
-                {isSinglesCategory(p.cat) ? (
-                  <select
-                    style={{ ...styles.tableInput, width: 70 }}
-                    value={p.condition || ""}
-                    onChange={(e) => updateProduct(p.id, "condition", e.target.value)}
-                  >
-                    <option value="">—</option>
-                    {CONDITIONS.map((c) => (
-                      <option key={c.value} value={c.value}>{c.value}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <span style={{ width: 70, color: MUTED, fontSize: 12, textAlign: "center" }}>—</span>
-                )}
-                <input
-                  style={{ ...styles.tableInput, width: 56, textTransform: "uppercase" }}
-                  defaultValue={p.tag}
-                  maxLength={4}
-                  onBlur={(e) => updateProduct(p.id, "tag", e.target.value.toUpperCase())}
-                />
-                <div style={styles.linkCell}>
+              <div key={p.id} style={styles.productCard}>
+                <div style={styles.productCardTop}>
                   <input
-                    style={{ ...styles.tableInput, width: 100 }}
-                    type="url"
-                    placeholder="Paste link"
-                    defaultValue={p.url || ""}
-                    onBlur={(e) => updateProduct(p.id, "url", e.target.value.trim())}
+                    style={styles.productCardNameInput}
+                    defaultValue={p.name}
+                    placeholder="Product name"
+                    onBlur={(e) => updateProduct(p.id, "name", e.target.value)}
                   />
                   <button
                     className="icon-btn"
-                    style={{ ...styles.iconBtn, width: 32, opacity: p.url ? 1 : 0.3 }}
-                    onClick={() => p.url && window.open(p.url, "_blank", "noopener,noreferrer")}
-                    disabled={!p.url}
-                    aria-label={`Open link for ${p.name}`}
+                    style={styles.iconBtn}
+                    onClick={() => deleteProduct(p.id)}
+                    aria-label={`Delete ${p.name}`}
                   >
-                    <LinkIcon size={13} color={MUTED} />
+                    <Trash2 size={14} color={MUTED} />
                   </button>
                 </div>
-                <input
-                  style={{ ...styles.tableInput, width: 80 }}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="—"
-                  defaultValue={p.marketPrice != null ? p.marketPrice : ""}
-                  onBlur={(e) => {
-                    const v = e.target.value === "" ? null : parseFloat(e.target.value);
-                    updateProduct(p.id, "marketPrice", isNaN(v) ? null : v);
-                  }}
-                />
-                {p.marketPrice != null ? (
-                  (() => {
-                    const diff = p.value - p.marketPrice;
-                    const diffPct = p.marketPrice > 0 ? (diff / p.marketPrice) * 100 : 0;
-                    return (
+
+                <div style={styles.productCardFieldsRow}>
+                  <MiniField label="Cost">
+                    <input
+                      style={styles.miniInput}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      defaultValue={p.cost}
+                      onBlur={(e) => updateProduct(p.id, "cost", parseFloat(e.target.value) || 0)}
+                    />
+                  </MiniField>
+                  <MiniField label="Value">
+                    <input
+                      style={styles.miniInput}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      defaultValue={p.value}
+                      onBlur={(e) => updateProduct(p.id, "value", parseFloat(e.target.value) || 0)}
+                    />
+                  </MiniField>
+                  <MiniField label="Margin">
+                    <span style={{ ...styles.miniStatic, color: margin >= 0 ? TEAL : "#B0413E" }}>
+                      {fmt(margin)} <span style={styles.marginPct}>({marginPct.toFixed(0)}%)</span>
+                    </span>
+                  </MiniField>
+                  <MiniField label="Stock">
+                    <input
+                      style={{ ...styles.miniInput, width: 56 }}
+                      type="number"
+                      step="1"
+                      min="0"
+                      defaultValue={p.stock ?? 0}
+                      onBlur={(e) => updateProduct(p.id, "stock", Math.max(0, parseInt(e.target.value) || 0))}
+                    />
+                  </MiniField>
+                  <MiniField label="Tag">
+                    <input
+                      style={{ ...styles.miniInput, width: 56, textTransform: "uppercase" }}
+                      defaultValue={p.tag}
+                      maxLength={4}
+                      onBlur={(e) => updateProduct(p.id, "tag", e.target.value.toUpperCase())}
+                    />
+                  </MiniField>
+                </div>
+
+                <div style={styles.productCardFieldsRow}>
+                  <MiniField label="Category">
+                    <select
+                      style={styles.miniInput}
+                      value={p.cat}
+                      onChange={(e) => updateProduct(p.id, "cat", e.target.value)}
+                    >
+                      {categories.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  </MiniField>
+                  {isSinglesCategory(p.cat) && (
+                    <MiniField label="Condition">
+                      <select
+                        style={styles.miniInput}
+                        value={p.condition || ""}
+                        onChange={(e) => updateProduct(p.id, "condition", e.target.value)}
+                      >
+                        <option value="">—</option>
+                        {CONDITIONS.map((c) => (
+                          <option key={c.value} value={c.value}>{c.value}</option>
+                        ))}
+                      </select>
+                    </MiniField>
+                  )}
+                </div>
+
+                <div style={styles.productCardFieldsRow}>
+                  <MiniField label="Link">
+                    <div style={{ display: "flex", gap: 4 }}>
+                      <input
+                        style={{ ...styles.miniInput, width: 150 }}
+                        type="url"
+                        placeholder="Paste link"
+                        defaultValue={p.url || ""}
+                        onBlur={(e) => updateProduct(p.id, "url", e.target.value.trim())}
+                      />
+                      <button
+                        className="icon-btn"
+                        style={{ ...styles.iconBtn, opacity: p.url ? 1 : 0.3 }}
+                        onClick={() => p.url && window.open(p.url, "_blank", "noopener,noreferrer")}
+                        disabled={!p.url}
+                        aria-label={`Open link for ${p.name}`}
+                      >
+                        <LinkIcon size={13} color={MUTED} />
+                      </button>
+                    </div>
+                  </MiniField>
+                  <MiniField label="Market $">
+                    <input
+                      style={styles.miniInput}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="—"
+                      defaultValue={p.marketPrice != null ? p.marketPrice : ""}
+                      onBlur={(e) => {
+                        const v = e.target.value === "" ? null : parseFloat(e.target.value);
+                        updateProduct(p.id, "marketPrice", isNaN(v) ? null : v);
+                      }}
+                    />
+                  </MiniField>
+                  {p.marketPrice != null && (
+                    <MiniField label="vs Market">
                       <span
                         style={{
-                          ...styles.marginTag,
-                          width: 90,
-                          color: diff > 0 ? "#B0413E" : diff < 0 ? TEAL : MUTED,
+                          ...styles.miniStatic,
+                          color: marketDiff > 0 ? "#B0413E" : marketDiff < 0 ? TEAL : MUTED,
                         }}
                       >
-                        {diff > 0 ? "+" : ""}
-                        {fmt(diff)}
-                        <span style={styles.marginPct}> ({diffPct > 0 ? "+" : ""}{diffPct.toFixed(0)}%)</span>
+                        {marketDiff > 0 ? "+" : ""}
+                        {fmt(marketDiff)}{" "}
+                        <span style={styles.marginPct}>
+                          ({marketDiffPct > 0 ? "+" : ""}{marketDiffPct.toFixed(0)}%)
+                        </span>
                       </span>
-                    );
-                  })()
-                ) : (
-                  <span style={{ width: 90, color: MUTED, fontSize: 12 }}>—</span>
-                )}
-                <button
-                  className="icon-btn"
-                  style={{ ...styles.iconBtn, width: 32 }}
-                  onClick={() => deleteProduct(p.id)}
-                  aria-label={`Delete ${p.name}`}
-                >
-                  <Trash2 size={14} color={MUTED} />
-                </button>
+                    </MiniField>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
 
-        <div style={{ ...styles.addProductRow, minWidth: 920 }}>
+        <div style={styles.addProductCard}>
+          <div style={styles.settingsHeading2}>Add a product</div>
           <input
-            style={{ ...styles.tableInput, flex: 2, minWidth: 140 }}
-            placeholder="New product name"
+            style={styles.productCardNameInput}
+            placeholder="Product name"
             value={draft.name}
             onChange={(e) => setDraft({ ...draft, name: e.target.value })}
           />
-          <input
-            style={{ ...styles.tableInput, width: 80 }}
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="Cost"
-            value={draft.cost}
-            onChange={(e) => setDraft({ ...draft, cost: e.target.value })}
-          />
-          <input
-            style={{ ...styles.tableInput, width: 80 }}
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="Value"
-            value={draft.value}
-            onChange={(e) => setDraft({ ...draft, value: e.target.value })}
-          />
-          <span style={{ width: 70 }} />
-          <input
-            style={{ ...styles.tableInput, width: 60 }}
-            type="number"
-            step="1"
-            min="0"
-            placeholder="Stock"
-            value={draft.stock}
-            onChange={(e) => setDraft({ ...draft, stock: e.target.value })}
-          />
-          <select
-            style={{ ...styles.tableInput, width: 130 }}
-            value={draft.cat}
-            onChange={(e) => setDraft({ ...draft, cat: e.target.value })}
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-          {isSinglesCategory(draft.cat) ? (
-            <select
-              style={{ ...styles.tableInput, width: 70 }}
-              value={draft.condition}
-              onChange={(e) => setDraft({ ...draft, condition: e.target.value })}
-            >
-              <option value="">—</option>
-              {CONDITIONS.map((c) => (
-                <option key={c.value} value={c.value}>{c.value}</option>
-              ))}
-            </select>
-          ) : (
-            <span style={{ width: 70 }} />
-          )}
-          <input
-            style={{ ...styles.tableInput, width: 56 }}
-            placeholder="TAG"
-            value={draft.tag}
-            onChange={(e) => setDraft({ ...draft, tag: e.target.value })}
-            maxLength={4}
-          />
-          <input
-            style={{ ...styles.tableInput, width: 140 }}
-            type="url"
-            placeholder="Link (optional)"
-            value={draft.url}
-            onChange={(e) => setDraft({ ...draft, url: e.target.value })}
-          />
-          <input
-            style={{ ...styles.tableInput, width: 80 }}
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="Market $"
-            value={draft.marketPrice}
-            onChange={(e) => setDraft({ ...draft, marketPrice: e.target.value })}
-          />
+          <div style={styles.productCardFieldsRow}>
+            <MiniField label="Cost">
+              <input
+                style={styles.miniInput}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0.00"
+                value={draft.cost}
+                onChange={(e) => setDraft({ ...draft, cost: e.target.value })}
+              />
+            </MiniField>
+            <MiniField label="Value">
+              <input
+                style={styles.miniInput}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0.00"
+                value={draft.value}
+                onChange={(e) => setDraft({ ...draft, value: e.target.value })}
+              />
+            </MiniField>
+            <MiniField label="Stock">
+              <input
+                style={{ ...styles.miniInput, width: 56 }}
+                type="number"
+                step="1"
+                min="0"
+                placeholder="0"
+                value={draft.stock}
+                onChange={(e) => setDraft({ ...draft, stock: e.target.value })}
+              />
+            </MiniField>
+            <MiniField label="Tag">
+              <input
+                style={{ ...styles.miniInput, width: 56 }}
+                placeholder="TAG"
+                value={draft.tag}
+                onChange={(e) => setDraft({ ...draft, tag: e.target.value })}
+                maxLength={4}
+              />
+            </MiniField>
+          </div>
+          <div style={styles.productCardFieldsRow}>
+            <MiniField label="Category">
+              <select
+                style={styles.miniInput}
+                value={draft.cat}
+                onChange={(e) => setDraft({ ...draft, cat: e.target.value })}
+              >
+                {categories.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </MiniField>
+            {isSinglesCategory(draft.cat) && (
+              <MiniField label="Condition">
+                <select
+                  style={styles.miniInput}
+                  value={draft.condition}
+                  onChange={(e) => setDraft({ ...draft, condition: e.target.value })}
+                >
+                  <option value="">—</option>
+                  {CONDITIONS.map((c) => (
+                    <option key={c.value} value={c.value}>{c.value}</option>
+                  ))}
+                </select>
+              </MiniField>
+            )}
+          </div>
+          <div style={styles.productCardFieldsRow}>
+            <MiniField label="Link">
+              <input
+                style={{ ...styles.miniInput, width: 150 }}
+                type="url"
+                placeholder="Link (optional)"
+                value={draft.url}
+                onChange={(e) => setDraft({ ...draft, url: e.target.value })}
+              />
+            </MiniField>
+            <MiniField label="Market $">
+              <input
+                style={styles.miniInput}
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="—"
+                value={draft.marketPrice}
+                onChange={(e) => setDraft({ ...draft, marketPrice: e.target.value })}
+              />
+            </MiniField>
+          </div>
           <button style={styles.addBtn} onClick={addProduct}>
-            <Plus size={14} /> Add
+            <Plus size={14} /> Add product
           </button>
         </div>
-        </div>
       </div>
+
 
       <div style={styles.settingsSection}>
         <div style={styles.settingsHeading}>Customers</div>
@@ -3330,8 +3368,33 @@ const styles = {
     display: "flex", alignItems: "center", gap: 5, background: INK, color: PAPER, border: "none",
     borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
   },
-  tableScrollWrap: { overflowX: "auto", WebkitOverflowScrolling: "touch", marginBottom: 4 },
-  productTable: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 },
+  productCardList: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 },
+  productCard: {
+    background: "#FAFAF7", border: `1px solid ${BORDER}`, borderRadius: 10, padding: 12,
+    display: "flex", flexDirection: "column", gap: 10,
+  },
+  productCardTop: { display: "flex", alignItems: "center", gap: 8 },
+  productCardNameInput: {
+    flex: 1, padding: "9px 10px", borderRadius: 7, border: `1px solid ${BORDER}`,
+    fontSize: 14.5, fontWeight: 600, fontFamily: "'Inter', sans-serif", background: "#FFFFFF", minWidth: 0,
+  },
+  productCardFieldsRow: { display: "flex", gap: 12, flexWrap: "wrap" },
+  addProductCard: {
+    background: "#FFFFFF", border: `1.5px dashed ${BORDER}`, borderRadius: 10, padding: 14,
+    display: "flex", flexDirection: "column", gap: 10,
+  },
+  miniField: { display: "flex", flexDirection: "column", gap: 3 },
+  miniFieldLabel: {
+    fontSize: 10, color: MUTED, textTransform: "uppercase", letterSpacing: "0.03em", fontWeight: 600,
+  },
+  miniInput: {
+    padding: "6px 8px", borderRadius: 6, border: `1px solid ${BORDER}`, fontSize: 13,
+    fontFamily: "'Inter', sans-serif", background: "#FFFFFF", width: 72,
+  },
+  miniStatic: {
+    fontSize: 13, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace",
+    display: "flex", alignItems: "baseline", gap: 3, paddingTop: 6,
+  },
   customerTable: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 },
   customerTableHead: {
     display: "flex", gap: 8, fontSize: 11, color: MUTED, textTransform: "uppercase",
@@ -3340,12 +3403,6 @@ const styles = {
   customerTableRow: { display: "flex", gap: 8, alignItems: "center" },
   customerAdjustRow: { display: "flex", alignItems: "center", gap: 6 },
   customerDeleteConfirmRow: { display: "flex", gap: 4 },
-  productTableHead: {
-    display: "flex", gap: 8, fontSize: 11, color: MUTED, textTransform: "uppercase",
-    letterSpacing: "0.04em", padding: "0 2px", fontWeight: 600,
-  },
-  productTableRow: { display: "flex", gap: 8, alignItems: "center" },
-  linkCell: { display: "flex", alignItems: "center", gap: 4 },
   marginTag: {
     width: 70, fontSize: 12.5, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600,
     display: "flex", alignItems: "baseline", gap: 3, flexShrink: 0,
