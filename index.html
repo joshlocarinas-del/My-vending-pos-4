@@ -2671,6 +2671,20 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
                 Copy link
               </button>
             </div>
+
+            <div style={styles.qrBox}>
+              <img
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(
+                  window.catalogTools.shareUrl
+                )}`}
+                alt="QR code linking to your inventory page"
+                style={styles.qrImg}
+              />
+              <div style={styles.qrCaption}>
+                Scan with a phone camera to open your inventory page — handy for a table sign or business card.
+              </div>
+            </div>
+
             <button
               style={styles.publishBtn}
               onClick={async () => {
@@ -3092,6 +3106,12 @@ const styles = {
     gap: 6,
   },
   shareLinkRow: { display: "flex", gap: 8, marginTop: 8, marginBottom: 10 },
+  qrBox: {
+    display: "flex", alignItems: "center", gap: 14, background: "#FAFAF7",
+    border: `1px solid ${BORDER}`, borderRadius: 10, padding: 14, marginBottom: 14, flexWrap: "wrap",
+  },
+  qrImg: { width: 100, height: 100, borderRadius: 6, background: "#FFFFFF", flexShrink: 0 },
+  qrCaption: { fontSize: 12.5, color: MUTED, lineHeight: 1.5, flex: 1, minWidth: 160 },
   publishBtn: {
     padding: "10px 16px",
     borderRadius: 8,
