@@ -4,10 +4,14 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
 <title>Card Vendor POS</title>
-<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgo=" />
+<link rel="manifest" href="./manifest.json" />
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png" />
+<link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+<meta name="theme-color" content="#23262B" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Vendor POS" />
 <style>
   html, body { margin: 0; padding: 0; background: #F5F6F3; }
   #root { min-height: 100vh; }
@@ -3478,6 +3482,13 @@ const styles = {
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(<AppRoot />);
+</script>
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    });
+  }
 </script>
 </body>
 </html>
