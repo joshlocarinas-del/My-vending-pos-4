@@ -478,6 +478,7 @@ function POS() {
   const [note, setNote] = useState("");
   const [funds, setFunds] = useState(0);
   const [shopName, setShopName] = useState("");
+  const [lowStockThreshold, setLowStockThreshold] = useState(3);
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
 
@@ -502,6 +503,7 @@ function POS() {
           }
           if (typeof cfg.funds === "number") setFunds(cfg.funds);
           if (typeof cfg.shopName === "string") setShopName(cfg.shopName);
+          if (typeof cfg.lowStockThreshold === "number") setLowStockThreshold(cfg.lowStockThreshold);
         }
       } catch (e) {
         // no saved config yet, keep defaults
@@ -527,7 +529,7 @@ function POS() {
       try {
         const result = await window.storage.set(
           "pos-config",
-          JSON.stringify({ categories, products, buyRatePct, tradeRatePct, customers, funds, shopName }),
+          JSON.stringify({ categories, products, buyRatePct, tradeRatePct, customers, funds, shopName, lowStockThreshold }),
           false
         );
         setSaveError(!result);
@@ -535,7 +537,7 @@ function POS() {
         setSaveError(true);
       }
     })();
-  }, [loaded, categories, products, buyRatePct, tradeRatePct, customers, funds, shopName]);
+  }, [loaded, categories, products, buyRatePct, tradeRatePct, customers, funds, shopName, lowStockThreshold]);
 
   // Save history whenever it changes (after initial load)
   useEffect(() => {
@@ -873,6 +875,8 @@ function POS() {
             funds={funds}
             creditBalance={totalCreditOwed}
             history={history}
+            lowStockThreshold={lowStockThreshold}
+            setLowStockThreshold={setLowStockThreshold}
           />
         </ErrorBoundary>
       )}
@@ -890,6 +894,14 @@ function POS() {
             setCustomers={setCustomers}
             shopName={shopName}
             setShopName={setShopName}
+            funds={funds}
+            setFunds={setFunds}
+            buyRatePct={buyRatePct}
+            setBuyRatePct={setBuyRatePct}
+            tradeRatePct={tradeRatePct}
+            setTradeRatePct={setTradeRatePct}
+            lowStockThreshold={lowStockThreshold}
+            setLowStockThreshold={setLowStockThreshold}
           />
         </ErrorBoundary>
       )}
@@ -1906,7 +1918,7 @@ function HistoryView({ history, setHistory }) {
   );
 }
 
-function ValueView({ products, categories, funds, creditBalance, history }) {
+function ValueView({ products, categories, funds, creditBalance, history, lowStockThreshold }) {
   const inventoryValue = products.reduce((s, p) => s + (p.stock || 0) * p.value, 0);
   const inventoryCost = products.reduce((s, p) => s + (p.stock || 0) * (p.cost || 0), 0);
   const potentialProfit = inventoryValue - inventoryCost;
@@ -1931,6 +1943,10 @@ function ValueView({ products, categories, funds, creditBalance, history }) {
     const cost = catProducts.reduce((s, p) => s + (p.stock || 0) * (p.cost || 0), 0);
     return { name: c, items, value, cost, profit: value - cost };
   });
+
+  const lowStockItems = products
+    .filter((p) => typeof p.stock === "number" && p.stock <= lowStockThreshold)
+    .sort((a, b) => a.stock - b.stock);
 
   return (
     <div style={styles.historyWrap}>
@@ -1993,6 +2009,25 @@ function ValueView({ products, categories, funds, creditBalance, history }) {
               Inventory — {fmt(inventoryValue)} ({inventoryPct.toFixed(0)}%)
             </div>
           </div>
+        </div>
+      )}
+
+      <div style={styles.settingsHeading2}>
+        Low Stock {lowStockItems.length > 0 && `(${lowStockItems.length})`}
+      </div>
+      {lowStockItems.length === 0 ? (
+        <div style={styles.emptyCart}>Nothing at or below {lowStockThreshold} units right now.</div>
+      ) : (
+        <div style={styles.lowStockList}>
+          {lowStockItems.map((p) => (
+            <div key={p.id} style={styles.lowStockRow2}>
+              <span style={styles.lowStockName}>{p.name}</span>
+              <span style={styles.lowStockCat}>{p.cat}</span>
+              <span style={{ ...styles.lowStockCount, color: p.stock === 0 ? "#B0413E" : AMBER_DARK }}>
+                {p.stock === 0 ? "Out of stock" : `${p.stock} left`}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 
@@ -2122,7 +2157,12 @@ function ReceiptModal({ sale, onClose }) {
   );
 }
 
-function SettingsView({ categories, setCategories, products, setProducts, history, setHistory, customers, setCustomers, shopName, setShopName }) {
+function SettingsView({
+  categories, setCategories, products, setProducts, history, setHistory,
+  customers, setCustomers, shopName, setShopName, funds, setFunds,
+  buyRatePct, setBuyRatePct, tradeRatePct, setTradeRatePct,
+  lowStockThreshold, setLowStockThreshold,
+}) {
   const [newCat, setNewCat] = useState("");
   const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "", condition: "", marketPrice: "" });
   const [confirmingReset, setConfirmingReset] = useState(false);
@@ -2134,6 +2174,10 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
   const [confirmingDeleteCustomerId, setConfirmingDeleteCustomerId] = useState(null);
   const [dupeFixResult, setDupeFixResult] = useState(null);
   const [publishStatus, setPublishStatus] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [productSort, setProductSort] = useState("name-asc");
+  const [importStatus, setImportStatus] = useState("");
+  const [confirmingImport, setConfirmingImport] = useState(null);
 
   const totalCreditOwed = customers.reduce((s, c) => s + (c.creditBalance || 0), 0);
 
@@ -2283,8 +2327,61 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
       {/* Products */}
       <div style={styles.settingsSection}>
         <div style={styles.settingsHeading}>Products</div>
+
+        <div style={styles.lowStockRow}>
+          <span style={styles.rateLabel}>Flag items as low stock at or below</span>
+          <input
+            type="number"
+            min="0"
+            value={lowStockThreshold}
+            onChange={(e) => setLowStockThreshold(Math.max(0, parseInt(e.target.value) || 0))}
+            style={styles.rateInput}
+          />
+          <span style={styles.rateLabel}>units</span>
+        </div>
+
+        <div style={styles.productSearchRow}>
+          <input
+            type="text"
+            value={productSearch}
+            onChange={(e) => setProductSearch(e.target.value)}
+            placeholder="Search products…"
+            style={styles.productSearchInput}
+          />
+          <select
+            value={productSort}
+            onChange={(e) => setProductSort(e.target.value)}
+            style={styles.productSortSelect}
+          >
+            <option value="name-asc">Name (A–Z)</option>
+            <option value="name-desc">Name (Z–A)</option>
+            <option value="value-desc">Value (high to low)</option>
+            <option value="value-asc">Value (low to high)</option>
+            <option value="stock-asc">Stock (low to high)</option>
+            <option value="stock-desc">Stock (high to low)</option>
+          </select>
+        </div>
+
         <div style={styles.productCardList}>
-          {products.map((p) => {
+          {products
+            .filter((p) => !productSearch.trim() || p.name.toLowerCase().includes(productSearch.trim().toLowerCase()))
+            .sort((a, b) => {
+              switch (productSort) {
+                case "name-desc":
+                  return b.name.localeCompare(a.name);
+                case "value-desc":
+                  return (b.value || 0) - (a.value || 0);
+                case "value-asc":
+                  return (a.value || 0) - (b.value || 0);
+                case "stock-asc":
+                  return (a.stock ?? Infinity) - (b.stock ?? Infinity);
+                case "stock-desc":
+                  return (b.stock ?? -Infinity) - (a.stock ?? -Infinity);
+                default:
+                  return a.name.localeCompare(b.name);
+              }
+            })
+            .map((p) => {
             const cost = p.cost || 0;
             const margin = p.value - cost;
             const marginPct = p.value > 0 ? (margin / p.value) * 100 : 0;
@@ -2337,13 +2434,22 @@ function SettingsView({ categories, setCategories, products, setProducts, histor
                   </MiniField>
                   <MiniField label="Stock">
                     <input
-                      style={{ ...styles.miniInput, width: 56 }}
+                      style={{
+                        ...styles.miniInput,
+                        width: 56,
+                        ...(typeof p.stock === "number" && p.stock <= lowStockThreshold
+                          ? styles.miniInputLow
+                          : {}),
+                      }}
                       type="number"
                       step="1"
                       min="0"
                       defaultValue={p.stock ?? 0}
                       onBlur={(e) => updateProduct(p.id, "stock", Math.max(0, parseInt(e.target.value) || 0))}
                     />
+                    {typeof p.stock === "number" && p.stock <= lowStockThreshold && (
+                      <span style={styles.lowStockBadge}>Low</span>
+                    )}
                   </MiniField>
                   <MiniField label="Tag">
                     <input
@@ -3414,6 +3520,23 @@ const styles = {
   miniInput: {
     padding: "6px 8px", borderRadius: 6, border: `1px solid ${BORDER}`, fontSize: 13,
     fontFamily: "'Inter', sans-serif", background: "#FFFFFF", width: 72,
+  },
+  miniInputLow: { borderColor: "#B0413E", color: "#B0413E", fontWeight: 600 },
+  lowStockBadge: {
+    fontSize: 10, fontWeight: 600, color: "#B0413E", background: "#FBEAEA",
+    padding: "1px 6px", borderRadius: 4, marginTop: 4, display: "inline-block",
+  },
+  lowStockRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" },
+  lowStockList: {
+    background: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: 10, overflow: "hidden", marginBottom: 20,
+  },
+  lowStockRow2: {
+    display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${BORDER}`,
+  },
+  lowStockName: { flex: 2, fontSize: 13, fontWeight: 500 },
+  lowStockCat: { fontSize: 11.5, color: MUTED, width: 110 },
+  lowStockCount: {
+    fontSize: 12.5, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace", width: 90, textAlign: "right",
   },
   miniStatic: {
     fontSize: 13, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace",
