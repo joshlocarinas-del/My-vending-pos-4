@@ -478,7 +478,6 @@ function POS() {
   const [note, setNote] = useState("");
   const [funds, setFunds] = useState(0);
   const [shopName, setShopName] = useState("");
-  const [lowStockThreshold, setLowStockThreshold] = useState(3);
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
 
@@ -503,7 +502,6 @@ function POS() {
           }
           if (typeof cfg.funds === "number") setFunds(cfg.funds);
           if (typeof cfg.shopName === "string") setShopName(cfg.shopName);
-          if (typeof cfg.lowStockThreshold === "number") setLowStockThreshold(cfg.lowStockThreshold);
         }
       } catch (e) {
         // no saved config yet, keep defaults
@@ -529,7 +527,7 @@ function POS() {
       try {
         const result = await window.storage.set(
           "pos-config",
-          JSON.stringify({ categories, products, buyRatePct, tradeRatePct, customers, funds, shopName, lowStockThreshold }),
+          JSON.stringify({ categories, products, buyRatePct, tradeRatePct, customers, funds, shopName }),
           false
         );
         setSaveError(!result);
@@ -537,7 +535,7 @@ function POS() {
         setSaveError(true);
       }
     })();
-  }, [loaded, categories, products, buyRatePct, tradeRatePct, customers, funds, shopName, lowStockThreshold]);
+  }, [loaded, categories, products, buyRatePct, tradeRatePct, customers, funds, shopName]);
 
   // Save history whenever it changes (after initial load)
   useEffect(() => {
@@ -875,8 +873,6 @@ function POS() {
             funds={funds}
             creditBalance={totalCreditOwed}
             history={history}
-            lowStockThreshold={lowStockThreshold}
-            setLowStockThreshold={setLowStockThreshold}
           />
         </ErrorBoundary>
       )}
@@ -900,8 +896,6 @@ function POS() {
             setBuyRatePct={setBuyRatePct}
             tradeRatePct={tradeRatePct}
             setTradeRatePct={setTradeRatePct}
-            lowStockThreshold={lowStockThreshold}
-            setLowStockThreshold={setLowStockThreshold}
           />
         </ErrorBoundary>
       )}
@@ -1918,7 +1912,7 @@ function HistoryView({ history, setHistory }) {
   );
 }
 
-function ValueView({ products, categories, funds, creditBalance, history, lowStockThreshold }) {
+function ValueView({ products, categories, funds, creditBalance, history }) {
   const inventoryValue = products.reduce((s, p) => s + (p.stock || 0) * p.value, 0);
   const inventoryCost = products.reduce((s, p) => s + (p.stock || 0) * (p.cost || 0), 0);
   const potentialProfit = inventoryValue - inventoryCost;
@@ -1943,10 +1937,6 @@ function ValueView({ products, categories, funds, creditBalance, history, lowSto
     const cost = catProducts.reduce((s, p) => s + (p.stock || 0) * (p.cost || 0), 0);
     return { name: c, items, value, cost, profit: value - cost };
   });
-
-  const lowStockItems = products
-    .filter((p) => typeof p.stock === "number" && p.stock <= lowStockThreshold)
-    .sort((a, b) => a.stock - b.stock);
 
   return (
     <div style={styles.historyWrap}>
@@ -2009,25 +1999,6 @@ function ValueView({ products, categories, funds, creditBalance, history, lowSto
               Inventory — {fmt(inventoryValue)} ({inventoryPct.toFixed(0)}%)
             </div>
           </div>
-        </div>
-      )}
-
-      <div style={styles.settingsHeading2}>
-        Low Stock {lowStockItems.length > 0 && `(${lowStockItems.length})`}
-      </div>
-      {lowStockItems.length === 0 ? (
-        <div style={styles.emptyCart}>Nothing at or below {lowStockThreshold} units right now.</div>
-      ) : (
-        <div style={styles.lowStockList}>
-          {lowStockItems.map((p) => (
-            <div key={p.id} style={styles.lowStockRow2}>
-              <span style={styles.lowStockName}>{p.name}</span>
-              <span style={styles.lowStockCat}>{p.cat}</span>
-              <span style={{ ...styles.lowStockCount, color: p.stock === 0 ? "#B0413E" : AMBER_DARK }}>
-                {p.stock === 0 ? "Out of stock" : `${p.stock} left`}
-              </span>
-            </div>
-          ))}
         </div>
       )}
 
@@ -2161,7 +2132,6 @@ function SettingsView({
   categories, setCategories, products, setProducts, history, setHistory,
   customers, setCustomers, shopName, setShopName, funds, setFunds,
   buyRatePct, setBuyRatePct, tradeRatePct, setTradeRatePct,
-  lowStockThreshold, setLowStockThreshold,
 }) {
   const [newCat, setNewCat] = useState("");
   const [draft, setDraft] = useState({ name: "", value: "", cost: "", stock: "", cat: categories[0] || "", tag: "", url: "", condition: "", marketPrice: "" });
@@ -2328,18 +2298,6 @@ function SettingsView({
       <div style={styles.settingsSection}>
         <div style={styles.settingsHeading}>Products</div>
 
-        <div style={styles.lowStockRow}>
-          <span style={styles.rateLabel}>Flag items as low stock at or below</span>
-          <input
-            type="number"
-            min="0"
-            value={lowStockThreshold}
-            onChange={(e) => setLowStockThreshold(Math.max(0, parseInt(e.target.value) || 0))}
-            style={styles.rateInput}
-          />
-          <span style={styles.rateLabel}>units</span>
-        </div>
-
         <div style={styles.productSearchRow}>
           <input
             type="text"
@@ -2362,7 +2320,22 @@ function SettingsView({
           </select>
         </div>
 
-        <div style={styles.productCardList}>
+        <div style={styles.tableScrollWrap}>
+        <div style={{ ...styles.productTable, minWidth: 1180 }}>
+          <div style={styles.productTableHead}>
+            <span style={{ flex: 2, minWidth: 160, ...styles.stickyNameHead }}>Name</span>
+            <span style={{ width: 80 }}>Cost</span>
+            <span style={{ width: 80 }}>Value</span>
+            <span style={{ width: 90 }}>Margin</span>
+            <span style={{ width: 60 }}>Stock</span>
+            <span style={{ width: 130 }}>Category</span>
+            <span style={{ width: 70 }}>Condition</span>
+            <span style={{ width: 56 }}>Tag</span>
+            <span style={{ width: 140 }}>Link</span>
+            <span style={{ width: 80 }}>Market $</span>
+            <span style={{ width: 90 }}>vs Market</span>
+            <span style={{ width: 32 }} />
+          </div>
           {products
             .filter((p) => !productSearch.trim() || p.name.toLowerCase().includes(productSearch.trim().toLowerCase()))
             .sort((a, b) => {
@@ -2388,162 +2361,127 @@ function SettingsView({
             const marketDiff = p.marketPrice != null ? p.value - p.marketPrice : null;
             const marketDiffPct = p.marketPrice > 0 ? (marketDiff / p.marketPrice) * 100 : 0;
             return (
-              <div key={p.id} style={styles.productCard}>
-                <div style={styles.productCardTop}>
+              <div key={p.id} style={styles.productTableRow}>
+                <input
+                  style={{ ...styles.tableInput, ...styles.stickyNameCell, flex: 2, minWidth: 160 }}
+                  defaultValue={p.name}
+                  placeholder="Product name"
+                  onBlur={(e) => updateProduct(p.id, "name", e.target.value)}
+                />
+                <input
+                  style={{ ...styles.tableInput, width: 80 }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={p.cost}
+                  onBlur={(e) => updateProduct(p.id, "cost", parseFloat(e.target.value) || 0)}
+                />
+                <input
+                  style={{ ...styles.tableInput, width: 80 }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={p.value}
+                  onBlur={(e) => updateProduct(p.id, "value", parseFloat(e.target.value) || 0)}
+                />
+                <span style={{ ...styles.marginTag, width: 90, color: margin >= 0 ? TEAL : "#B0413E" }}>
+                  {fmt(margin)}
+                  <span style={styles.marginPct}> ({marginPct.toFixed(0)}%)</span>
+                </span>
+                <input
+                  style={{ ...styles.tableInput, width: 60 }}
+                  type="number"
+                  step="1"
+                  min="0"
+                  defaultValue={p.stock ?? 0}
+                  onBlur={(e) => updateProduct(p.id, "stock", Math.max(0, parseInt(e.target.value) || 0))}
+                />
+                <select
+                  style={{ ...styles.tableInput, width: 130 }}
+                  value={p.cat}
+                  onChange={(e) => updateProduct(p.id, "cat", e.target.value)}
+                >
+                  {categories.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+                {isSinglesCategory(p.cat) ? (
+                  <select
+                    style={{ ...styles.tableInput, width: 70 }}
+                    value={p.condition || ""}
+                    onChange={(e) => updateProduct(p.id, "condition", e.target.value)}
+                  >
+                    <option value="">—</option>
+                    {CONDITIONS.map((c) => (
+                      <option key={c.value} value={c.value}>{c.value}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <span style={{ width: 70, color: MUTED, fontSize: 12, textAlign: "center" }}>—</span>
+                )}
+                <input
+                  style={{ ...styles.tableInput, width: 56, textTransform: "uppercase" }}
+                  defaultValue={p.tag}
+                  maxLength={4}
+                  onBlur={(e) => updateProduct(p.id, "tag", e.target.value.toUpperCase())}
+                />
+                <div style={styles.linkCell}>
                   <input
-                    style={styles.productCardNameInput}
-                    defaultValue={p.name}
-                    placeholder="Product name"
-                    onBlur={(e) => updateProduct(p.id, "name", e.target.value)}
+                    style={{ ...styles.tableInput, width: 100 }}
+                    type="url"
+                    placeholder="Paste link"
+                    defaultValue={p.url || ""}
+                    onBlur={(e) => updateProduct(p.id, "url", e.target.value.trim())}
                   />
                   <button
                     className="icon-btn"
-                    style={styles.iconBtn}
-                    onClick={() => deleteProduct(p.id)}
-                    aria-label={`Delete ${p.name}`}
+                    style={{ ...styles.iconBtn, width: 32, opacity: p.url ? 1 : 0.3 }}
+                    onClick={() => p.url && window.open(p.url, "_blank", "noopener,noreferrer")}
+                    disabled={!p.url}
+                    aria-label={`Open link for ${p.name}`}
                   >
-                    <Trash2 size={14} color={MUTED} />
+                    <LinkIcon size={13} color={MUTED} />
                   </button>
                 </div>
-
-                <div style={styles.productCardFieldsRow}>
-                  <MiniField label="Cost">
-                    <input
-                      style={styles.miniInput}
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      defaultValue={p.cost}
-                      onBlur={(e) => updateProduct(p.id, "cost", parseFloat(e.target.value) || 0)}
-                    />
-                  </MiniField>
-                  <MiniField label="Value">
-                    <input
-                      style={styles.miniInput}
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      defaultValue={p.value}
-                      onBlur={(e) => updateProduct(p.id, "value", parseFloat(e.target.value) || 0)}
-                    />
-                  </MiniField>
-                  <MiniField label="Margin">
-                    <span style={{ ...styles.miniStatic, color: margin >= 0 ? TEAL : "#B0413E" }}>
-                      {fmt(margin)} <span style={styles.marginPct}>({marginPct.toFixed(0)}%)</span>
-                    </span>
-                  </MiniField>
-                  <MiniField label="Stock">
-                    <input
-                      style={{
-                        ...styles.miniInput,
-                        width: 56,
-                        ...(typeof p.stock === "number" && p.stock <= lowStockThreshold
-                          ? styles.miniInputLow
-                          : {}),
-                      }}
-                      type="number"
-                      step="1"
-                      min="0"
-                      defaultValue={p.stock ?? 0}
-                      onBlur={(e) => updateProduct(p.id, "stock", Math.max(0, parseInt(e.target.value) || 0))}
-                    />
-                    {typeof p.stock === "number" && p.stock <= lowStockThreshold && (
-                      <span style={styles.lowStockBadge}>Low</span>
-                    )}
-                  </MiniField>
-                  <MiniField label="Tag">
-                    <input
-                      style={{ ...styles.miniInput, width: 56, textTransform: "uppercase" }}
-                      defaultValue={p.tag}
-                      maxLength={4}
-                      onBlur={(e) => updateProduct(p.id, "tag", e.target.value.toUpperCase())}
-                    />
-                  </MiniField>
-                </div>
-
-                <div style={styles.productCardFieldsRow}>
-                  <MiniField label="Category">
-                    <select
-                      style={styles.miniInput}
-                      value={p.cat}
-                      onChange={(e) => updateProduct(p.id, "cat", e.target.value)}
-                    >
-                      {categories.map((c) => (
-                        <option key={c} value={c}>{c}</option>
-                      ))}
-                    </select>
-                  </MiniField>
-                  {isSinglesCategory(p.cat) && (
-                    <MiniField label="Condition">
-                      <select
-                        style={styles.miniInput}
-                        value={p.condition || ""}
-                        onChange={(e) => updateProduct(p.id, "condition", e.target.value)}
-                      >
-                        <option value="">—</option>
-                        {CONDITIONS.map((c) => (
-                          <option key={c.value} value={c.value}>{c.value}</option>
-                        ))}
-                      </select>
-                    </MiniField>
-                  )}
-                </div>
-
-                <div style={styles.productCardFieldsRow}>
-                  <MiniField label="Link">
-                    <div style={{ display: "flex", gap: 4 }}>
-                      <input
-                        style={{ ...styles.miniInput, width: 150 }}
-                        type="url"
-                        placeholder="Paste link"
-                        defaultValue={p.url || ""}
-                        onBlur={(e) => updateProduct(p.id, "url", e.target.value.trim())}
-                      />
-                      <button
-                        className="icon-btn"
-                        style={{ ...styles.iconBtn, opacity: p.url ? 1 : 0.3 }}
-                        onClick={() => p.url && window.open(p.url, "_blank", "noopener,noreferrer")}
-                        disabled={!p.url}
-                        aria-label={`Open link for ${p.name}`}
-                      >
-                        <LinkIcon size={13} color={MUTED} />
-                      </button>
-                    </div>
-                  </MiniField>
-                  <MiniField label="Market $">
-                    <input
-                      style={styles.miniInput}
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      placeholder="—"
-                      defaultValue={p.marketPrice != null ? p.marketPrice : ""}
-                      onBlur={(e) => {
-                        const v = e.target.value === "" ? null : parseFloat(e.target.value);
-                        updateProduct(p.id, "marketPrice", isNaN(v) ? null : v);
-                      }}
-                    />
-                  </MiniField>
-                  {p.marketPrice != null && (
-                    <MiniField label="vs Market">
-                      <span
-                        style={{
-                          ...styles.miniStatic,
-                          color: marketDiff > 0 ? "#B0413E" : marketDiff < 0 ? TEAL : MUTED,
-                        }}
-                      >
-                        {marketDiff > 0 ? "+" : ""}
-                        {fmt(marketDiff)}{" "}
-                        <span style={styles.marginPct}>
-                          ({marketDiffPct > 0 ? "+" : ""}{marketDiffPct.toFixed(0)}%)
-                        </span>
-                      </span>
-                    </MiniField>
-                  )}
-                </div>
+                <input
+                  style={{ ...styles.tableInput, width: 80 }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="—"
+                  defaultValue={p.marketPrice != null ? p.marketPrice : ""}
+                  onBlur={(e) => {
+                    const v = e.target.value === "" ? null : parseFloat(e.target.value);
+                    updateProduct(p.id, "marketPrice", isNaN(v) ? null : v);
+                  }}
+                />
+                {p.marketPrice != null ? (
+                  <span
+                    style={{
+                      ...styles.marginTag,
+                      width: 90,
+                      color: marketDiff > 0 ? "#B0413E" : marketDiff < 0 ? TEAL : MUTED,
+                    }}
+                  >
+                    {marketDiff > 0 ? "+" : ""}
+                    {fmt(marketDiff)}
+                    <span style={styles.marginPct}> ({marketDiffPct > 0 ? "+" : ""}{marketDiffPct.toFixed(0)}%)</span>
+                  </span>
+                ) : (
+                  <span style={{ width: 90, color: MUTED, fontSize: 12 }}>—</span>
+                )}
+                <button
+                  className="icon-btn"
+                  style={{ ...styles.iconBtn, width: 32 }}
+                  onClick={() => deleteProduct(p.id)}
+                  aria-label={`Delete ${p.name}`}
+                >
+                  <Trash2 size={14} color={MUTED} />
+                </button>
               </div>
             );
           })}
+        </div>
         </div>
 
         <div style={styles.addProductCard}>
@@ -3498,6 +3436,21 @@ const styles = {
     display: "flex", alignItems: "center", gap: 5, background: INK, color: PAPER, border: "none",
     borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap",
   },
+  productTable: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 },
+  productTableHead: {
+    display: "flex", gap: 8, fontSize: 11, color: MUTED, textTransform: "uppercase",
+    letterSpacing: "0.04em", padding: "0 2px", fontWeight: 600,
+  },
+  productTableRow: {
+    display: "flex", gap: 8, alignItems: "center", background: "#FFFFFF",
+    border: `1px solid ${BORDER}`, borderRadius: 8, padding: "8px 8px",
+  },
+  stickyNameHead: {
+    position: "sticky", left: 0, background: PAPER, zIndex: 2, paddingRight: 8,
+  },
+  stickyNameCell: {
+    position: "sticky", left: 0, zIndex: 2, boxShadow: "4px 0 6px -4px rgba(0,0,0,0.15)",
+  },
   productCardList: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 },
   productCard: {
     background: "#FAFAF7", border: `1px solid ${BORDER}`, borderRadius: 10, padding: 12,
@@ -3520,23 +3473,6 @@ const styles = {
   miniInput: {
     padding: "6px 8px", borderRadius: 6, border: `1px solid ${BORDER}`, fontSize: 13,
     fontFamily: "'Inter', sans-serif", background: "#FFFFFF", width: 72,
-  },
-  miniInputLow: { borderColor: "#B0413E", color: "#B0413E", fontWeight: 600 },
-  lowStockBadge: {
-    fontSize: 10, fontWeight: 600, color: "#B0413E", background: "#FBEAEA",
-    padding: "1px 6px", borderRadius: 4, marginTop: 4, display: "inline-block",
-  },
-  lowStockRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 12, flexWrap: "wrap" },
-  lowStockList: {
-    background: "#FFFFFF", border: `1px solid ${BORDER}`, borderRadius: 10, overflow: "hidden", marginBottom: 20,
-  },
-  lowStockRow2: {
-    display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: `1px solid ${BORDER}`,
-  },
-  lowStockName: { flex: 2, fontSize: 13, fontWeight: 500 },
-  lowStockCat: { fontSize: 11.5, color: MUTED, width: 110 },
-  lowStockCount: {
-    fontSize: 12.5, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace", width: 90, textAlign: "right",
   },
   miniStatic: {
     fontSize: 13, fontWeight: 600, fontFamily: "'IBM Plex Mono', monospace",
