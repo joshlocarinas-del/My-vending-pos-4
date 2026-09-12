@@ -1,4 +1,4 @@
-const CACHE_NAME = "vendor-pos-cache-v1";
+const CACHE_NAME = "vendor-pos-cache-v2";
 const CORE_ASSETS = [
   "./",
   "./index.html",
