@@ -2323,11 +2323,11 @@ function SettingsView({
         <div style={styles.tableScrollWrap}>
         <div style={{ ...styles.productTable, minWidth: 1180 }}>
           <div style={styles.productTableHead}>
-            <span style={{ flex: 2, minWidth: 160, ...styles.stickyNameHead }}>Name</span>
+            <span style={{ width: 200, ...styles.stickyNameHead }}>Name</span>
+            <span style={{ width: 80, ...styles.stickyValueHead }}>Value</span>
+            <span style={{ width: 60, ...styles.stickyStockHead }}>Stock</span>
             <span style={{ width: 80 }}>Cost</span>
-            <span style={{ width: 80 }}>Value</span>
             <span style={{ width: 90 }}>Margin</span>
-            <span style={{ width: 60 }}>Stock</span>
             <span style={{ width: 130 }}>Category</span>
             <span style={{ width: 70 }}>Condition</span>
             <span style={{ width: 56 }}>Tag</span>
@@ -2363,10 +2363,26 @@ function SettingsView({
             return (
               <div key={p.id} style={styles.productTableRow}>
                 <input
-                  style={{ ...styles.tableInput, ...styles.stickyNameCell, flex: 2, minWidth: 160 }}
+                  style={{ ...styles.tableInput, ...styles.stickyNameCell, width: 200 }}
                   defaultValue={p.name}
                   placeholder="Product name"
                   onBlur={(e) => updateProduct(p.id, "name", e.target.value)}
+                />
+                <input
+                  style={{ ...styles.tableInput, ...styles.stickyValueCell, width: 80 }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  defaultValue={p.value}
+                  onBlur={(e) => updateProduct(p.id, "value", parseFloat(e.target.value) || 0)}
+                />
+                <input
+                  style={{ ...styles.tableInput, ...styles.stickyStockCell, width: 60 }}
+                  type="number"
+                  step="1"
+                  min="0"
+                  defaultValue={p.stock ?? 0}
+                  onBlur={(e) => updateProduct(p.id, "stock", Math.max(0, parseInt(e.target.value) || 0))}
                 />
                 <input
                   style={{ ...styles.tableInput, width: 80 }}
@@ -2376,26 +2392,10 @@ function SettingsView({
                   defaultValue={p.cost}
                   onBlur={(e) => updateProduct(p.id, "cost", parseFloat(e.target.value) || 0)}
                 />
-                <input
-                  style={{ ...styles.tableInput, width: 80 }}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  defaultValue={p.value}
-                  onBlur={(e) => updateProduct(p.id, "value", parseFloat(e.target.value) || 0)}
-                />
                 <span style={{ ...styles.marginTag, width: 90, color: margin >= 0 ? TEAL : "#B0413E" }}>
                   {fmt(margin)}
                   <span style={styles.marginPct}> ({marginPct.toFixed(0)}%)</span>
                 </span>
-                <input
-                  style={{ ...styles.tableInput, width: 60 }}
-                  type="number"
-                  step="1"
-                  min="0"
-                  defaultValue={p.stock ?? 0}
-                  onBlur={(e) => updateProduct(p.id, "stock", Math.max(0, parseInt(e.target.value) || 0))}
-                />
                 <select
                   style={{ ...styles.tableInput, width: 130 }}
                   value={p.cat}
@@ -3452,10 +3452,22 @@ const styles = {
     border: `1px solid ${BORDER}`, borderRadius: 8, padding: "8px 8px",
   },
   stickyNameHead: {
-    position: "sticky", left: 0, background: PAPER, zIndex: 2, paddingRight: 8,
+    position: "sticky", left: 0, background: "#FFFFFF", zIndex: 3, paddingRight: 8,
   },
   stickyNameCell: {
-    position: "sticky", left: 0, zIndex: 2, boxShadow: "4px 0 6px -4px rgba(0,0,0,0.15)",
+    position: "sticky", left: 0, zIndex: 3,
+  },
+  stickyValueHead: {
+    position: "sticky", left: 200, background: "#FFFFFF", zIndex: 3, paddingRight: 8,
+  },
+  stickyValueCell: {
+    position: "sticky", left: 200, zIndex: 3,
+  },
+  stickyStockHead: {
+    position: "sticky", left: 280, background: "#FFFFFF", zIndex: 3, paddingRight: 8,
+  },
+  stickyStockCell: {
+    position: "sticky", left: 280, zIndex: 3, boxShadow: "4px 0 6px -4px rgba(0,0,0,0.15)",
   },
   productCardList: { display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 },
   productCard: {
